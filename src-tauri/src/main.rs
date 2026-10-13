@@ -1671,6 +1671,7 @@ async fn slice_solid_native_to_temp_path(
             export_thumbnail_png_base64: meta.export_thumbnail_png_base64,
             triangles_xyz,
             metadata_json: meta.metadata_json,
+            ..Default::default()
         };
 
         eprintln!(

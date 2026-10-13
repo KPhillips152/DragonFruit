@@ -81,6 +81,18 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_support_halo_max_intensity_percent() -> f32 {
+    50.0
+}
+
+fn default_support_halo_profile() -> String {
+    "linear".to_string()
+}
+
+fn default_support_halo_scope() -> String {
+    "tips_only".to_string()
+}
+
 fn dynamic_minimum_alpha_lut(percent: f32) -> Option<[u8; 256]> {
     let min_alpha = ((percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
     if min_alpha == 0 {
@@ -114,7 +126,7 @@ fn anti_aliasing_level_steps(level: &str) -> u8 {
     0
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SliceJobV3 {
     /// Target output extension selected from registered encoders.
     pub output_format: String,
@@ -193,6 +205,25 @@ pub struct SliceJobV3 {
     /// `0` means "unspecified" (no geometry split metadata).
     #[serde(default = "default_model_triangle_count")]
     pub model_triangle_count: u32,
+    /// Enable Euclidean radial grayscale cure halo around support cross-sections.
+    #[serde(default)]
+    pub support_halo_enabled: bool,
+    /// Outer Euclidean radius of the support halo in output pixels (0..=8).
+    #[serde(default)]
+    pub support_halo_radius_px: u32,
+    /// Peak grayscale intensity at the first halo ring as a percentage of 255 (0..=100).
+    #[serde(default = "default_support_halo_max_intensity_percent")]
+    pub support_halo_max_intensity_percent: f32,
+    /// Radial falloff curve (`linear`, `exponential`, `gaussian`).
+    #[serde(default = "default_support_halo_profile")]
+    pub support_halo_profile: String,
+    /// Target support geometry scope (`tips_only`, `full_supports`).
+    #[serde(default = "default_support_halo_scope")]
+    pub support_halo_scope: String,
+    /// Start triangle index of support contact tips at the tail of `triangles_xyz`.
+    /// When `0`, `tips_only` falls back to `model_triangle_count`.
+    #[serde(default)]
+    pub support_tip_start_triangle: u32,
     /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
     ///
     /// When no explicit custom cure LUT is provided, the engine turns this
@@ -260,6 +291,59 @@ pub struct SliceJobV3 {
     pub metadata_json: String,
 }
 
+impl Default for SliceJobV3 {
+    fn default() -> Self {
+        Self {
+            output_format: String::new(),
+            format_version: None,
+            source_width_px: 0,
+            source_height_px: 0,
+            width_px: 0,
+            height_px: 0,
+            x_packing_mode: String::new(),
+            build_width_mm: 0.0,
+            build_depth_mm: 0.0,
+            layer_height_mm: 0.0,
+            total_layers: 0,
+            export_thumbnail_png_base64: None,
+            png_compression_strategy: String::new(),
+            container_compression_level: 0,
+            anti_aliasing_level: String::new(),
+            anti_aliasing_mode: String::new(),
+            blur_brush_radius_px: 0,
+            blur_brush_kernel: String::new(),
+            blur_brush_sigma_x: 0.0,
+            blur_brush_sigma_y: 0.0,
+            z_blur_radius_layers: 0,
+            z_blur_kernel: String::new(),
+            z_blur_sigma: 0.0,
+            aa_on_supports: false,
+            model_triangle_count: 0,
+            support_halo_enabled: false,
+            support_halo_radius_px: 0,
+            support_halo_max_intensity_percent: default_support_halo_max_intensity_percent(),
+            support_halo_profile: default_support_halo_profile(),
+            support_halo_scope: default_support_halo_scope(),
+            support_tip_start_triangle: 0,
+            minimum_aa_alpha_percent: 0.0,
+            mirror_x: false,
+            mirror_y: false,
+            z_blend_look_back: 0,
+            z_blend_minimum_alpha_percent: 0.0,
+            z_blend_max_alpha_percent: 0.0,
+            z_blend_custom_lut: None,
+            zaa_kernel: None,
+            zaa_pattern: None,
+            zaa_duplicate_z: None,
+            dither_enabled: false,
+            dither_bit_depth: None,
+            dither_device_gamma: 0.0,
+            triangles_xyz: Vec::new(),
+            metadata_json: String::new(),
+        }
+    }
+}
+
 impl SliceJobV3 {
     /// Effective render width in pixels.
     ///
@@ -314,7 +398,81 @@ impl SliceJobV3 {
     }
 
     #[inline]
+    pub fn effective_support_halo_radius_px(&self) -> u32 {
+        if !self.support_halo_enabled {
+            return 0;
+        }
+        self.support_halo_radius_px.clamp(0, 8)
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_intensity_u8(&self) -> u8 {
+        let pct = if self.support_halo_max_intensity_percent.is_finite() {
+            self.support_halo_max_intensity_percent.clamp(0.0, 100.0)
+        } else {
+            50.0
+        };
+        ((pct / 100.0) * 255.0).round().clamp(0.0, 255.0) as u8
+    }
+
+    #[inline]
+    pub fn support_halo_active(&self) -> bool {
+        self.effective_support_halo_radius_px() > 0
+            && self.effective_support_halo_max_intensity_u8() > 0
+    }
+
+    #[inline]
+    pub fn support_halo_is_tips_only(&self) -> bool {
+        !self
+            .support_halo_scope
+            .trim()
+            .eq_ignore_ascii_case("full_supports")
+    }
+
+    /// Computes `(aa_end_tri, halo_start_tri)` when support triangles require
+    /// a separate binary and/or Euclidean radial halo pass.
+    ///
+    /// - `[0 .. aa_end_tri)`: Model pass (uses job AA / blur / 3DAA settings)
+    /// - `[aa_end_tri .. halo_start_tri)`: Support body binary pass (`255`, no AA, no halo)
+    /// - `[halo_start_tri .. total_triangles)`: Support halo pass (`255` core + radial halo)
+    #[inline]
+    pub fn support_split_triangle_bounds(
+        &self,
+        total_triangles: usize,
+        model_aa_active: bool,
+    ) -> Option<(usize, usize)> {
+        let model_tri = self.model_triangle_count as usize;
+        if model_tri == 0 || model_tri >= total_triangles {
+            return None;
+        }
+        let tip_start = self.support_tip_start_triangle as usize;
+        let halo_start_tri = if self.support_halo_active() {
+            if self.support_halo_is_tips_only() && tip_start > model_tri {
+                tip_start.min(total_triangles)
+            } else {
+                model_tri
+            }
+        } else {
+            total_triangles
+        };
+        let aa_end_tri = if model_aa_active && !self.aa_on_supports {
+            model_tri
+        } else {
+            halo_start_tri
+        };
+        if aa_end_tri >= total_triangles && halo_start_tri >= total_triangles {
+            None
+        } else {
+            Some((aa_end_tri, halo_start_tri))
+        }
+    }
+
+    #[inline]
     pub fn produces_grayscale_output(&self) -> bool {
+        if self.support_halo_active() {
+            return true;
+        }
+
         if self.anti_aliasing_mode_is_vertical() {
             return true;
         }

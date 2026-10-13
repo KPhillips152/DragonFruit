@@ -1113,42 +1113,46 @@ fn blur_radius_px(radius_px: u32) -> usize {
 }
 
 #[inline]
-fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
-    if job.aa_on_supports {
-        return false;
-    }
-
-    let model_triangle_count = job.model_triangle_count as usize;
-    if model_triangle_count == 0 || model_triangle_count >= triangle_count {
-        return false;
-    }
-
+fn support_split_bounds_for_2d_raster(
+    job: &SliceJobV3,
+    triangle_count: usize,
+) -> Option<(usize, usize)> {
     let aa_steps = (job.effective_xy_aa_steps() as usize).max(1);
     let blur_mode = job.anti_aliasing_mode_is_blur();
-    let blur_radius = if blur_mode {
+    let blur_radius = if blur_mode && job.blur_brush_radius_px > 0 {
         blur_radius_px(job.blur_brush_radius_px)
     } else {
         0
     };
-
-    aa_steps > 1 || blur_radius > 0
+    let model_aa_active = aa_steps > 1 || blur_radius > 0;
+    job.support_split_triangle_bounds(triangle_count, model_aa_active)
 }
 
 #[inline]
-fn split_layer_candidates_by_geometry(
+fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
+    support_split_bounds_for_2d_raster(job, triangle_count).is_some()
+}
+
+#[inline]
+fn split_layer_candidates_by_bounds(
     layer_indices: &[usize],
-    model_triangle_count: usize,
+    aa_end_tri: usize,
+    halo_start_tri: usize,
     model_out: &mut Vec<usize>,
-    support_out: &mut Vec<usize>,
+    support_body_out: &mut Vec<usize>,
+    support_halo_out: &mut Vec<usize>,
 ) {
     model_out.clear();
-    support_out.clear();
+    support_body_out.clear();
+    support_halo_out.clear();
 
     for &idx in layer_indices {
-        if idx < model_triangle_count {
+        if idx < aa_end_tri {
             model_out.push(idx);
+        } else if idx < halo_start_tri {
+            support_body_out.push(idx);
         } else {
-            support_out.push(idx);
+            support_halo_out.push(idx);
         }
     }
 }
@@ -2934,7 +2938,8 @@ pub fn rasterize_layer_with_stats(
     layer_index: u32,
     compute_area_stats: bool,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
-    if !supports_should_bypass_aa(job, triangles.len()) {
+    let Some((aa_end_tri, halo_start_tri)) = support_split_bounds_for_2d_raster(job, triangles.len())
+    else {
         return rasterize_layer_with_stats_impl(
             job,
             triangles,
@@ -2942,19 +2947,21 @@ pub fn rasterize_layer_with_stats(
             layer_index,
             compute_area_stats,
         );
-    }
+    };
 
-    let model_triangle_count = (job.model_triangle_count as usize).min(triangles.len());
     let mut model_layer_indices = Vec::with_capacity(layer_indices.len());
-    let mut support_layer_indices = Vec::with_capacity(layer_indices.len());
-    split_layer_candidates_by_geometry(
+    let mut support_body_indices = Vec::with_capacity(layer_indices.len());
+    let mut support_halo_indices = Vec::with_capacity(layer_indices.len());
+    split_layer_candidates_by_bounds(
         layer_indices,
-        model_triangle_count,
+        aa_end_tri,
+        halo_start_tri,
         &mut model_layer_indices,
-        &mut support_layer_indices,
+        &mut support_body_indices,
+        &mut support_halo_indices,
     );
 
-    if support_layer_indices.is_empty() {
+    if support_body_indices.is_empty() && support_halo_indices.is_empty() {
         return rasterize_layer_with_stats_impl(
             job,
             triangles,
@@ -2974,18 +2981,49 @@ pub fn rasterize_layer_with_stats(
     support_job.minimum_aa_alpha_percent = 100.0;
     support_job.aa_on_supports = true;
     support_job.model_triangle_count = 0;
+    support_job.support_halo_enabled = false;
+    support_job.support_halo_radius_px = 0;
 
-    let (support_mask, _support_stats) = rasterize_layer_with_stats_impl(
-        &support_job,
-        triangles,
-        &support_layer_indices,
-        layer_index,
-        false,
-    );
+    if !support_body_indices.is_empty() {
+        let (support_body_mask, _support_stats) = rasterize_layer_with_stats_impl(
+            &support_job,
+            triangles,
+            &support_body_indices,
+            layer_index,
+            false,
+        );
 
-    for (dst, src) in model_mask.iter_mut().zip(support_mask.iter()) {
-        if *src > *dst {
-            *dst = *src;
+        for (dst, src) in model_mask.iter_mut().zip(support_body_mask.iter()) {
+            if *src > *dst {
+                *dst = *src;
+            }
+        }
+    }
+
+    if !support_halo_indices.is_empty() {
+        let (mut support_halo_mask, _support_stats) = rasterize_layer_with_stats_impl(
+            &support_job,
+            triangles,
+            &support_halo_indices,
+            layer_index,
+            false,
+        );
+
+        let width = job.effective_render_width_px() as usize;
+        let height = job.source_height_px as usize;
+        apply_euclidean_radial_halo_dense(
+            &mut support_halo_mask,
+            width,
+            height,
+            job.effective_support_halo_radius_px(),
+            job.effective_support_halo_max_intensity_u8(),
+            SupportHaloProfile::from_str_lossy(&job.support_halo_profile),
+        );
+
+        for (dst, src) in model_mask.iter_mut().zip(support_halo_mask.iter()) {
+            if *src > *dst {
+                *dst = *src;
+            }
         }
     }
 
@@ -4593,14 +4631,279 @@ fn box_rle_blur_with_simd<S: pulp::Simd, const ADD_COLUMNS: bool>(
     (runs, out_bounds)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportHaloProfile {
+    Linear,
+    Exponential,
+    Gaussian,
+}
+
+impl SupportHaloProfile {
+    pub fn from_str_lossy(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "exponential" | "exp" => Self::Exponential,
+            "gaussian" | "gauss" => Self::Gaussian,
+            _ => Self::Linear,
+        }
+    }
+}
+
+struct SupportHaloRowKernel {
+    dy: isize,
+    interior_val: u8,
+    caps: Vec<(usize, u8)>,
+}
+
+#[inline]
+fn eval_halo_intensity(
+    d: f32,
+    r_f: f32,
+    max_intensity_u8: u8,
+    profile: SupportHaloProfile,
+) -> u8 {
+    if d <= 0.0 {
+        return 255;
+    }
+    if d > r_f || max_intensity_u8 == 0 {
+        return 0;
+    }
+    let linear_t = ((r_f + 1.0 - d) / (r_f + 1.0)).clamp(0.0, 1.0);
+    let alpha = match profile {
+        SupportHaloProfile::Linear => linear_t,
+        SupportHaloProfile::Exponential => {
+            ((-1.5 * (d - 1.0) / r_f.max(1.0)).exp() * linear_t).clamp(0.0, 1.0)
+        }
+        SupportHaloProfile::Gaussian => {
+            let sigma = (0.5 * r_f).max(0.5);
+            (-(d * d) / (2.0 * sigma * sigma)).exp().clamp(0.0, 1.0)
+        }
+    };
+    ((max_intensity_u8 as f32) * alpha).round().clamp(0.0, 255.0) as u8
+}
+
+fn build_euclidean_halo_row_kernels(
+    radius_px: u32,
+    max_intensity_u8: u8,
+    profile: SupportHaloProfile,
+) -> Vec<SupportHaloRowKernel> {
+    let r = radius_px.clamp(1, 8) as isize;
+    let r_f = r as f32;
+    let r_sq = r * r;
+    let mut kernels = Vec::with_capacity((2 * r + 1) as usize);
+
+    for dy in -r..=r {
+        let interior_val = if dy == 0 {
+            255
+        } else {
+            eval_halo_intensity(dy.unsigned_abs() as f32, r_f, max_intensity_u8, profile)
+        };
+        let mut caps = Vec::with_capacity(r as usize);
+        for dx in 1..=r {
+            let d_sq = dx * dx + dy * dy;
+            if d_sq <= r_sq {
+                let d = (d_sq as f32).sqrt();
+                let val = eval_halo_intensity(d, r_f, max_intensity_u8, profile);
+                if val > 0 {
+                    caps.push((dx as usize, val));
+                }
+            }
+        }
+        kernels.push(SupportHaloRowKernel {
+            dy,
+            interior_val,
+            caps,
+        });
+    }
+
+    kernels
+}
+
+pub fn apply_euclidean_radial_halo_rle(
+    support_runs: &[crate::rle::RleRun],
+    width: usize,
+    height: usize,
+    radius_px: u32,
+    max_intensity_u8: u8,
+    profile: SupportHaloProfile,
+) -> Vec<crate::rle::RleRun> {
+    use crate::rle::{emit_row, emit_zero_rows, RleAccum};
+
+    let radius = radius_px.min(8) as usize;
+    if width == 0
+        || height == 0
+        || radius == 0
+        || max_intensity_u8 == 0
+        || support_runs.is_empty()
+    {
+        return support_runs.to_vec();
+    }
+
+    let Some((min_x, max_x, min_y, max_y)) =
+        compute_nonzero_bounds_from_rle(support_runs, width, height)
+    else {
+        return support_runs.to_vec();
+    };
+
+    let roi_min_x = min_x.saturating_sub(radius);
+    let roi_max_x = (max_x + radius).min(width - 1);
+    let roi_min_y = min_y.saturating_sub(radius);
+    let roi_max_y = (max_y + radius).min(height - 1);
+    let roi_w = roi_max_x - roi_min_x + 1;
+    let right_zeros = width - 1 - roi_max_x;
+
+    let ring_cap = 2 * radius + 1;
+    let mut ring = vec![0u8; ring_cap * roi_w];
+    let mut slot_dirty = vec![false; ring_cap];
+    let row_kernels =
+        build_euclidean_halo_row_kernels(radius as u32, max_intensity_u8, profile);
+
+    let mut out_rle = RleAccum::new();
+    emit_zero_rows(&mut out_rle, roi_min_y, width);
+
+    let flush_ring_row = |target_y: usize,
+                          ring: &mut [u8],
+                          slot_dirty: &mut [bool],
+                          out_rle: &mut RleAccum| {
+        let slot = (target_y - roi_min_y) % ring_cap;
+        if !slot_dirty[slot] {
+            emit_zero_rows(out_rle, 1, width);
+        } else {
+            let slot_offset = slot * roi_w;
+            let row_slice = &mut ring[slot_offset..slot_offset + roi_w];
+            if roi_min_x > 0 {
+                out_rle.push_run(roi_min_x as u32, 0);
+            }
+            emit_row(out_rle, row_slice);
+            if right_zeros > 0 {
+                out_rle.push_run(right_zeros as u32, 0);
+            }
+            row_slice.fill(0);
+            slot_dirty[slot] = false;
+        }
+    };
+
+    let mut next_unflushed_y = roi_min_y;
+    let total_pixels = width * height;
+    let mut abs_pos = 0usize;
+
+    for run in support_runs {
+        let len = run.length as usize;
+        if len == 0 {
+            continue;
+        }
+        if run.value == 0 {
+            abs_pos = abs_pos.saturating_add(len);
+            continue;
+        }
+
+        let mut rem = len;
+        while rem > 0 && abs_pos < total_pixels {
+            let in_y = abs_pos / width;
+            let x_start = abs_pos % width;
+            let take = rem.min(width - x_start);
+            let x_end = x_start + take;
+
+            while next_unflushed_y + radius < in_y && next_unflushed_y <= roi_max_y {
+                flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
+                next_unflushed_y += 1;
+            }
+
+            let ix0 = x_start - roi_min_x;
+            let ix1 = x_end - roi_min_x;
+
+            for rk in &row_kernels {
+                let ty_isize = in_y as isize + rk.dy;
+                if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
+                    continue;
+                }
+                let ty = ty_isize as usize;
+                let slot = (ty - roi_min_y) % ring_cap;
+                slot_dirty[slot] = true;
+                let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+
+                if rk.interior_val == 255 {
+                    row_slice[ix0..ix1].fill(255);
+                } else if rk.interior_val > 0 {
+                    for px in &mut row_slice[ix0..ix1] {
+                        if rk.interior_val > *px {
+                            *px = rk.interior_val;
+                        }
+                    }
+                }
+
+                for &(dx, cap_val) in &rk.caps {
+                    if let Some(lx) = x_start.checked_sub(dx) {
+                        if lx >= roi_min_x {
+                            let idx = lx - roi_min_x;
+                            if cap_val > row_slice[idx] {
+                                row_slice[idx] = cap_val;
+                            }
+                        }
+                    }
+                    let rx = x_end - 1 + dx;
+                    if rx <= roi_max_x {
+                        let idx = rx - roi_min_x;
+                        if cap_val > row_slice[idx] {
+                            row_slice[idx] = cap_val;
+                        }
+                    }
+                }
+            }
+
+            abs_pos += take;
+            rem -= take;
+        }
+    }
+
+    while next_unflushed_y <= roi_max_y {
+        flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
+        next_unflushed_y += 1;
+    }
+
+    emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
+    out_rle.finish()
+}
+
+pub fn apply_euclidean_radial_halo_dense(
+    support_mask: &mut [u8],
+    width: usize,
+    height: usize,
+    radius_px: u32,
+    max_intensity_u8: u8,
+    profile: SupportHaloProfile,
+) {
+    let radius = radius_px.min(8);
+    if width == 0
+        || height == 0
+        || radius == 0
+        || max_intensity_u8 == 0
+        || support_mask.len() < width * height
+    {
+        return;
+    }
+    let runs = encode_mask_to_rle(&support_mask[..width * height], width, height);
+    let halo_runs =
+        apply_euclidean_radial_halo_rle(&runs, width, height, radius, max_intensity_u8, profile);
+    let mut cursor = 0usize;
+    let total = width * height;
+    for run in halo_runs {
+        if cursor >= total {
+            break;
+        }
+        let take = (run.length as usize).min(total - cursor);
+        support_mask[cursor..cursor + take].fill(run.value);
+        cursor += take;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_blur_postprocess_inplace, blur_gray_rle_streaming, build_row_spans_nonzero,
-        encode_bounded_gray_mask_to_rle, encode_mask_to_rle, encode_mask_to_rle_in_bounds,
-        rasterize_layer, rasterize_layer_rle, rasterize_layer_rle_block,
-        rasterize_layer_with_stats, remap_gray_rle_with_lut, resolve_accumulated_aa_alpha,
-        ActiveEdge,
+        apply_blur_postprocess_inplace, apply_euclidean_radial_halo_rle, blur_gray_rle_streaming,
+        build_row_spans_nonzero, encode_bounded_gray_mask_to_rle, encode_mask_to_rle,
+        encode_mask_to_rle_in_bounds, rasterize_layer, rasterize_layer_rle,
+        rasterize_layer_rle_block, rasterize_layer_with_stats, remap_gray_rle_with_lut,
+        resolve_accumulated_aa_alpha, ActiveEdge, SupportHaloProfile,
     };
     use crate::binary_mask::BoundedGrayMask;
     use crate::encoders::registry::supported_output_formats;
@@ -4702,7 +5005,77 @@ mod tests {
             triangles_xyz: Vec::new(),
             metadata_json: "{}".to_string(),
             x_packing_mode: "none".to_string(),
+            ..Default::default()
         }
+    }
+
+    #[test]
+    fn halo_preserves_binary_core_and_decays_radially() {
+        let width = 21usize;
+        let height = 21usize;
+        let mut mask = vec![0u8; width * height];
+        mask[10 * width + 10] = 255;
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+
+        let halo_runs = apply_euclidean_radial_halo_rle(
+            &support_runs,
+            width,
+            height,
+            3,
+            128,
+            SupportHaloProfile::Linear,
+        );
+        let out = expand_rle_to_mask(&halo_runs, width * height);
+
+        // Core preserved at (10, 10)
+        assert_eq!(out[10 * width + 10], 255);
+        // Orthogonal neighbors at d = 1: round(128 * 3 / 4) = 96
+        assert_eq!(out[10 * width + 9], 96);
+        assert_eq!(out[10 * width + 11], 96);
+        assert_eq!(out[9 * width + 10], 96);
+        assert_eq!(out[11 * width + 10], 96);
+        // Diagonal neighbors at d = sqrt(2): round(128 * (4 - sqrt(2)) / 4) = 83
+        assert_eq!(out[9 * width + 9], 83);
+        assert_eq!(out[9 * width + 11], 83);
+        assert_eq!(out[11 * width + 9], 83);
+        assert_eq!(out[11 * width + 11], 83);
+        // Corners at (±3, ±3) where dx^2 + dy^2 = 18 > 9 must be 0 (Euclidean circle, not Chebyshev box)
+        assert_eq!(out[7 * width + 7], 0);
+        assert_eq!(out[7 * width + 13], 0);
+        assert_eq!(out[13 * width + 7], 0);
+        assert_eq!(out[13 * width + 13], 0);
+    }
+
+    #[test]
+    fn halo_merge_never_darkens_model_aa_pixels() {
+        let width = 21usize;
+        let height = 21usize;
+        let mut support_mask = vec![0u8; width * height];
+        support_mask[10 * width + 10] = 255;
+        let support_runs = encode_mask_to_rle(&support_mask, width, height);
+        let halo_runs = apply_euclidean_radial_halo_rle(
+            &support_runs,
+            width,
+            height,
+            3,
+            128,
+            SupportHaloProfile::Linear,
+        );
+
+        let mut model_mask = vec![0u8; width * height];
+        // Overlap orthogonal halo pixel (9, 10) which has halo value 96 with model AA value 200
+        model_mask[10 * width + 9] = 200;
+        // Overlap core pixel (10, 10) with model AA value 200
+        model_mask[10 * width + 10] = 200;
+        let model_runs = encode_mask_to_rle(&model_mask, width, height);
+
+        let merged_runs = crate::pipeline::merge_rle_max(&model_runs, &halo_runs);
+        let merged = expand_rle_to_mask(&merged_runs, width * height);
+
+        // Halo pixel (96) must not darken model AA pixel (200), while uncovered halo pixel (11, 10) gets 96
+        assert_eq!(merged[10 * width + 9], 200);
+        assert_eq!(merged[10 * width + 10], 255);
+        assert_eq!(merged[10 * width + 11], 96);
     }
 
     #[test]
