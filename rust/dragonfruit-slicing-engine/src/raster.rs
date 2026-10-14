@@ -1116,7 +1116,7 @@ fn blur_radius_px(radius_px: u32) -> usize {
 fn support_split_bounds_for_2d_raster(
     job: &SliceJobV3,
     triangle_count: usize,
-) -> Option<(usize, usize)> {
+) -> Option<usize> {
     let aa_steps = (job.effective_xy_aa_steps() as usize).max(1);
     let blur_mode = job.anti_aliasing_mode_is_blur();
     let blur_radius = if blur_mode && job.blur_brush_radius_px > 0 {
@@ -1136,23 +1136,18 @@ fn supports_should_bypass_aa(job: &SliceJobV3, triangle_count: usize) -> bool {
 #[inline]
 fn split_layer_candidates_by_bounds(
     layer_indices: &[usize],
-    aa_end_tri: usize,
-    halo_start_tri: usize,
+    model_tri: usize,
     model_out: &mut Vec<usize>,
-    support_body_out: &mut Vec<usize>,
-    support_halo_out: &mut Vec<usize>,
+    support_out: &mut Vec<usize>,
 ) {
     model_out.clear();
-    support_body_out.clear();
-    support_halo_out.clear();
+    support_out.clear();
 
     for &idx in layer_indices {
-        if idx < aa_end_tri {
+        if idx < model_tri {
             model_out.push(idx);
-        } else if idx < halo_start_tri {
-            support_body_out.push(idx);
         } else {
-            support_halo_out.push(idx);
+            support_out.push(idx);
         }
     }
 }
@@ -2938,7 +2933,7 @@ pub fn rasterize_layer_with_stats(
     layer_index: u32,
     compute_area_stats: bool,
 ) -> (Vec<u8>, LayerAreaStatsV3) {
-    let Some((aa_end_tri, halo_start_tri)) = support_split_bounds_for_2d_raster(job, triangles.len())
+    let Some(model_tri) = support_split_bounds_for_2d_raster(job, triangles.len())
     else {
         return rasterize_layer_with_stats_impl(
             job,
@@ -2950,18 +2945,15 @@ pub fn rasterize_layer_with_stats(
     };
 
     let mut model_layer_indices = Vec::with_capacity(layer_indices.len());
-    let mut support_body_indices = Vec::with_capacity(layer_indices.len());
-    let mut support_halo_indices = Vec::with_capacity(layer_indices.len());
+    let mut support_layer_indices = Vec::with_capacity(layer_indices.len());
     split_layer_candidates_by_bounds(
         layer_indices,
-        aa_end_tri,
-        halo_start_tri,
+        model_tri,
         &mut model_layer_indices,
-        &mut support_body_indices,
-        &mut support_halo_indices,
+        &mut support_layer_indices,
     );
 
-    if support_body_indices.is_empty() && support_halo_indices.is_empty() {
+    if support_layer_indices.is_empty() {
         return rasterize_layer_with_stats_impl(
             job,
             triangles,
@@ -2984,46 +2976,31 @@ pub fn rasterize_layer_with_stats(
     support_job.support_halo_enabled = false;
     support_job.support_halo_radius_px = 0;
 
-    if !support_body_indices.is_empty() {
-        let (support_body_mask, _support_stats) = rasterize_layer_with_stats_impl(
-            &support_job,
-            triangles,
-            &support_body_indices,
-            layer_index,
-            false,
-        );
+    let (mut support_mask, _support_stats) = rasterize_layer_with_stats_impl(
+        &support_job,
+        triangles,
+        &support_layer_indices,
+        layer_index,
+        false,
+    );
 
-        for (dst, src) in model_mask.iter_mut().zip(support_body_mask.iter()) {
-            if *src > *dst {
-                *dst = *src;
-            }
-        }
-    }
-
-    if !support_halo_indices.is_empty() {
-        let (mut support_halo_mask, _support_stats) = rasterize_layer_with_stats_impl(
-            &support_job,
-            triangles,
-            &support_halo_indices,
-            layer_index,
-            false,
-        );
-
+    if job.support_halo_active() {
         let width = job.effective_render_width_px() as usize;
         let height = job.source_height_px as usize;
         apply_euclidean_radial_halo_dense(
-            &mut support_halo_mask,
+            &mut support_mask,
             width,
             height,
             job.effective_support_halo_radius_px(),
             job.effective_support_halo_max_intensity_u8(),
             SupportHaloProfile::from_str_lossy(&job.support_halo_profile),
+            job.effective_support_halo_max_tip_diameter_px(),
         );
+    }
 
-        for (dst, src) in model_mask.iter_mut().zip(support_halo_mask.iter()) {
-            if *src > *dst {
-                *dst = *src;
-            }
+    for (dst, src) in model_mask.iter_mut().zip(support_mask.iter()) {
+        if *src > *dst {
+            *dst = *src;
         }
     }
 
@@ -4718,6 +4695,158 @@ fn build_euclidean_halo_row_kernels(
     kernels
 }
 
+#[derive(Clone, Copy, Debug)]
+struct SupportRowSpan {
+    y: usize,
+    x_start: usize,
+    x_end: usize,
+    emit_halo: bool,
+}
+
+fn find_root_span(parent: &mut [usize], mut i: usize) -> usize {
+    while parent[i] != i {
+        let gp = parent[parent[i]];
+        parent[i] = gp;
+        i = gp;
+    }
+    i
+}
+
+/// Evaluates 2D Thin Cross-Section Gating (`tips_only`) over horizontal support spans.
+///
+/// 1. **2D Connected-Component Bounding-Box Gate**:
+///    Any 8-connected 2D support component whose bounding box satisfies
+///    `width <= max_d` and `height <= max_d` emits halo on all its spans.
+/// 2. **Local 2D Thin-Protrusion / Neck Gate (Polar-Cap Suppression)**:
+///    For components exceeding `max_d` (e.g. thick trunks, rafts, or thin tips
+///    touching a wider body), any span with chord width `> max_d` suppresses halo.
+///    For spans with chord width `<= max_d` inside a large component, a 2-pass
+///    vertical distance sweep (`dist_to_wide`) checks whether the span is within
+///    `cap_look_rows = (max_d / 2) + 2` 8-connected rows of a wide chord (`> max_d`).
+///    By circle geometry, the North/South polar scanline cap of ANY circular trunk
+///    of diameter `D > max_d` has height `< max_d / 2`, so polar caps are always
+///    suppressed (`emit_halo = false`), while genuine thin protrusions extending
+///    beyond `cap_look_rows` still emit halo (`emit_halo = true`).
+fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
+    let n = spans.len();
+    if n == 0 {
+        return;
+    }
+    let max_d = max_d_px.max(1) as usize;
+    let inf_dist = u32::MAX / 2;
+
+    let mut parent: Vec<usize> = (0..n).collect();
+    let mut dist_to_wide: Vec<u32> = spans
+        .iter()
+        .map(|s| {
+            if s.x_end - s.x_start > max_d {
+                0
+            } else {
+                inf_dist
+            }
+        })
+        .collect();
+
+    // Group spans into contiguous row ranges `(row_y, start_idx, end_idx)`.
+    let mut rows: Vec<(usize, usize, usize)> = Vec::new();
+    let mut r_start = 0usize;
+    for i in 1..=n {
+        if i == n || spans[i].y != spans[r_start].y {
+            rows.push((spans[r_start].y, r_start, i));
+            r_start = i;
+        }
+    }
+
+    // Pass 1: Top-down 8-connected Union-Find + downward distance from wide chords.
+    for r_idx in 1..rows.len() {
+        let (prev_y, p0, p1) = rows[r_idx - 1];
+        let (curr_y, c0, c1) = rows[r_idx];
+        if prev_y + 1 != curr_y {
+            continue;
+        }
+        let mut p = p0;
+        for c in c0..c1 {
+            let cx0 = spans[c].x_start;
+            let cx1 = spans[c].x_end;
+            while p < p1 && spans[p].x_end < cx0 {
+                p += 1;
+            }
+            let mut scan_p = p;
+            while scan_p < p1 && spans[scan_p].x_start <= cx1 {
+                // 8-connected overlap: `[px0, px1 - 1]` touches `[cx0, cx1 - 1]` iff `px0 <= cx1 && cx0 <= px1`.
+                let ra = find_root_span(&mut parent, scan_p);
+                let rb = find_root_span(&mut parent, c);
+                if ra != rb {
+                    if ra < rb {
+                        parent[rb] = ra;
+                    } else {
+                        parent[ra] = rb;
+                    }
+                }
+                let cand = dist_to_wide[scan_p].saturating_add(1);
+                if cand < dist_to_wide[c] {
+                    dist_to_wide[c] = cand;
+                }
+                scan_p += 1;
+            }
+        }
+    }
+
+    // Pass 2: Bottom-up upward distance from wide chords.
+    for r_idx in (0..rows.len().saturating_sub(1)).rev() {
+        let (curr_y, c0, c1) = rows[r_idx];
+        let (next_y, n0, n1) = rows[r_idx + 1];
+        if curr_y + 1 != next_y {
+            continue;
+        }
+        let mut nx = n0;
+        for c in c0..c1 {
+            let cx0 = spans[c].x_start;
+            let cx1 = spans[c].x_end;
+            while nx < n1 && spans[nx].x_end < cx0 {
+                nx += 1;
+            }
+            let mut scan_n = nx;
+            while scan_n < n1 && spans[scan_n].x_start <= cx1 {
+                let cand = dist_to_wide[scan_n].saturating_add(1);
+                if cand < dist_to_wide[c] {
+                    dist_to_wide[c] = cand;
+                }
+                scan_n += 1;
+            }
+        }
+    }
+
+    // Compute 2D bounding boxes per connected component root.
+    let mut comp_min_x = vec![usize::MAX; n];
+    let mut comp_max_x = vec![0usize; n];
+    let mut comp_min_y = vec![usize::MAX; n];
+    let mut comp_max_y = vec![0usize; n];
+
+    for i in 0..n {
+        let r = find_root_span(&mut parent, i);
+        let s = &spans[i];
+        comp_min_x[r] = comp_min_x[r].min(s.x_start);
+        comp_max_x[r] = comp_max_x[r].max(s.x_end - 1);
+        comp_min_y[r] = comp_min_y[r].min(s.y);
+        comp_max_y[r] = comp_max_y[r].max(s.y);
+    }
+
+    let cap_look_rows = ((max_d / 2) + 2) as u32;
+    for i in 0..n {
+        let r = parent[i];
+        let comp_w = comp_max_x[r] - comp_min_x[r] + 1;
+        let comp_h = comp_max_y[r] - comp_min_y[r] + 1;
+        if comp_w <= max_d && comp_h <= max_d {
+            spans[i].emit_halo = true;
+        } else {
+            let span_w = spans[i].x_end - spans[i].x_start;
+            spans[i].emit_halo =
+                span_w <= max_d && dist_to_wide[i] > cap_look_rows && dist_to_wide[i] < inf_dist / 2;
+        }
+    }
+}
+
 pub fn apply_euclidean_radial_halo_rle(
     support_runs: &[crate::rle::RleRun],
     width: usize,
@@ -4725,6 +4854,7 @@ pub fn apply_euclidean_radial_halo_rle(
     radius_px: u32,
     max_intensity_u8: u8,
     profile: SupportHaloProfile,
+    max_tip_diameter_px: Option<u32>,
 ) -> Vec<crate::rle::RleRun> {
     use crate::rle::{emit_row, emit_zero_rows, RleAccum};
 
@@ -4738,11 +4868,68 @@ pub fn apply_euclidean_radial_halo_rle(
         return support_runs.to_vec();
     }
 
-    let Some((min_x, max_x, min_y, max_y)) =
-        compute_nonzero_bounds_from_rle(support_runs, width, height)
-    else {
+    let total_pixels = width * height;
+    let mut abs_pos = 0usize;
+    let mut spans: Vec<SupportRowSpan> = Vec::new();
+    let mut min_x = width;
+    let mut max_x = 0usize;
+    let mut min_y = height;
+    let mut max_y = 0usize;
+
+    for run in support_runs {
+        let len = run.length as usize;
+        if len == 0 {
+            continue;
+        }
+        if run.value == 0 {
+            abs_pos = abs_pos.saturating_add(len);
+            continue;
+        }
+
+        let mut rem = len;
+        while rem > 0 && abs_pos < total_pixels {
+            let in_y = abs_pos / width;
+            let x_start = abs_pos % width;
+            let take = rem.min(width - x_start);
+            let x_end = x_start + take;
+
+            min_x = min_x.min(x_start);
+            max_x = max_x.max(x_end - 1);
+            min_y = min_y.min(in_y);
+            max_y = max_y.max(in_y);
+
+            if let Some(last) = spans.last_mut() {
+                if last.y == in_y && last.x_end == x_start {
+                    last.x_end = x_end;
+                } else {
+                    spans.push(SupportRowSpan {
+                        y: in_y,
+                        x_start,
+                        x_end,
+                        emit_halo: true,
+                    });
+                }
+            } else {
+                spans.push(SupportRowSpan {
+                    y: in_y,
+                    x_start,
+                    x_end,
+                    emit_halo: true,
+                });
+            }
+
+            abs_pos += take;
+            rem -= take;
+        }
+    }
+
+    if spans.is_empty() {
         return support_runs.to_vec();
-    };
+    }
+
+    if let Some(max_d_px) = max_tip_diameter_px {
+        gate_thin_support_spans(&mut spans, max_d_px);
+    }
 
     let roi_min_x = min_x.saturating_sub(radius);
     let roi_max_x = (max_x + radius).min(width - 1);
@@ -4783,75 +4970,65 @@ pub fn apply_euclidean_radial_halo_rle(
     };
 
     let mut next_unflushed_y = roi_min_y;
-    let total_pixels = width * height;
-    let mut abs_pos = 0usize;
 
-    for run in support_runs {
-        let len = run.length as usize;
-        if len == 0 {
-            continue;
-        }
-        if run.value == 0 {
-            abs_pos = abs_pos.saturating_add(len);
-            continue;
+    for span in &spans {
+        let in_y = span.y;
+        let x_start = span.x_start;
+        let x_end = span.x_end;
+
+        while next_unflushed_y + radius < in_y && next_unflushed_y <= roi_max_y {
+            flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
+            next_unflushed_y += 1;
         }
 
-        let mut rem = len;
-        while rem > 0 && abs_pos < total_pixels {
-            let in_y = abs_pos / width;
-            let x_start = abs_pos % width;
-            let take = rem.min(width - x_start);
-            let x_end = x_start + take;
+        let ix0 = x_start - roi_min_x;
+        let ix1 = x_end - roi_min_x;
 
-            while next_unflushed_y + radius < in_y && next_unflushed_y <= roi_max_y {
-                flush_ring_row(next_unflushed_y, &mut ring, &mut slot_dirty, &mut out_rle);
-                next_unflushed_y += 1;
+        if !span.emit_halo {
+            let slot = (in_y - roi_min_y) % ring_cap;
+            slot_dirty[slot] = true;
+            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+            row_slice[ix0..ix1].fill(255);
+            continue;
+        }
+
+        for rk in &row_kernels {
+            let ty_isize = in_y as isize + rk.dy;
+            if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
+                continue;
+            }
+            let ty = ty_isize as usize;
+            let slot = (ty - roi_min_y) % ring_cap;
+            slot_dirty[slot] = true;
+            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+
+            if rk.interior_val == 255 {
+                row_slice[ix0..ix1].fill(255);
+            } else if rk.interior_val > 0 {
+                for px in &mut row_slice[ix0..ix1] {
+                    if rk.interior_val > *px {
+                        *px = rk.interior_val;
+                    }
+                }
             }
 
-            let ix0 = x_start - roi_min_x;
-            let ix1 = x_end - roi_min_x;
-
-            for rk in &row_kernels {
-                let ty_isize = in_y as isize + rk.dy;
-                if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
-                    continue;
-                }
-                let ty = ty_isize as usize;
-                let slot = (ty - roi_min_y) % ring_cap;
-                slot_dirty[slot] = true;
-                let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
-
-                if rk.interior_val == 255 {
-                    row_slice[ix0..ix1].fill(255);
-                } else if rk.interior_val > 0 {
-                    for px in &mut row_slice[ix0..ix1] {
-                        if rk.interior_val > *px {
-                            *px = rk.interior_val;
-                        }
-                    }
-                }
-
-                for &(dx, cap_val) in &rk.caps {
-                    if let Some(lx) = x_start.checked_sub(dx) {
-                        if lx >= roi_min_x {
-                            let idx = lx - roi_min_x;
-                            if cap_val > row_slice[idx] {
-                                row_slice[idx] = cap_val;
-                            }
-                        }
-                    }
-                    let rx = x_end - 1 + dx;
-                    if rx <= roi_max_x {
-                        let idx = rx - roi_min_x;
+            for &(dx, cap_val) in &rk.caps {
+                if let Some(lx) = x_start.checked_sub(dx) {
+                    if lx >= roi_min_x {
+                        let idx = lx - roi_min_x;
                         if cap_val > row_slice[idx] {
                             row_slice[idx] = cap_val;
                         }
                     }
                 }
+                let rx = x_end - 1 + dx;
+                if rx <= roi_max_x {
+                    let idx = rx - roi_min_x;
+                    if cap_val > row_slice[idx] {
+                        row_slice[idx] = cap_val;
+                    }
+                }
             }
-
-            abs_pos += take;
-            rem -= take;
         }
     }
 
@@ -4871,6 +5048,7 @@ pub fn apply_euclidean_radial_halo_dense(
     radius_px: u32,
     max_intensity_u8: u8,
     profile: SupportHaloProfile,
+    max_tip_diameter_px: Option<u32>,
 ) {
     let radius = radius_px.min(8);
     if width == 0
@@ -4882,8 +5060,15 @@ pub fn apply_euclidean_radial_halo_dense(
         return;
     }
     let runs = encode_mask_to_rle(&support_mask[..width * height], width, height);
-    let halo_runs =
-        apply_euclidean_radial_halo_rle(&runs, width, height, radius, max_intensity_u8, profile);
+    let halo_runs = apply_euclidean_radial_halo_rle(
+        &runs,
+        width,
+        height,
+        radius,
+        max_intensity_u8,
+        profile,
+        max_tip_diameter_px,
+    );
     let mut cursor = 0usize;
     let total = width * height;
     for run in halo_runs {
@@ -5024,6 +5209,7 @@ mod tests {
             3,
             128,
             SupportHaloProfile::Linear,
+            None,
         );
         let out = expand_rle_to_mask(&halo_runs, width * height);
 
@@ -5060,6 +5246,7 @@ mod tests {
             3,
             128,
             SupportHaloProfile::Linear,
+            None,
         );
 
         let mut model_mask = vec![0u8; width * height];
@@ -5076,6 +5263,69 @@ mod tests {
         assert_eq!(merged[10 * width + 9], 200);
         assert_eq!(merged[10 * width + 10], 255);
         assert_eq!(merged[10 * width + 11], 96);
+    }
+
+    #[test]
+    fn halo_tips_only_gates_out_thick_trunks_and_polar_caps_while_haloing_thin_tips() {
+        let width = 80usize;
+        let height = 80usize;
+        let mut mask = vec![0u8; width * height];
+
+        // 1. Thin circular tip centered at (15, 40) with radius 3px (diameter ~7px <= 12px)
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as isize - 15;
+                let dy = y as isize - 40;
+                if dx * dx + dy * dy <= 9 {
+                    mask[y * width + x] = 255;
+                }
+            }
+        }
+
+        // 2. Thick circular trunk centered at (50, 40) with radius 11px (diameter ~23px > 12px),
+        //    which includes narrow North/South polar scanline caps of chord width <= 12px!
+        for y in 0..height {
+            for x in 0..width {
+                let dx = x as isize - 50;
+                let dy = y as isize - 40;
+                if dx * dx + dy * dy <= 121 {
+                    mask[y * width + x] = 255;
+                }
+            }
+        }
+
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+        let halo_runs = apply_euclidean_radial_halo_rle(
+            &support_runs,
+            width,
+            height,
+            3,
+            128,
+            SupportHaloProfile::Linear,
+            Some(12),
+        );
+        let out = expand_rle_to_mask(&halo_runs, width * height);
+
+        // Every original 255 pixel in both the thin tip and thick trunk must remain 255.
+        for idx in 0..(width * height) {
+            if mask[idx] == 255 {
+                assert_eq!(out[idx], 255);
+            }
+        }
+
+        // Thin tip at (15, 40) must emit intermediate grayscale halo pixels around it (e.g., at (19, 40)).
+        assert!(out[40 * width + 19] > 0 && out[40 * width + 19] < 255);
+
+        // Thick circular trunk at (50, 40) must emit ZERO halo pixels anywhere around it,
+        // including above/below its narrow North/South polar scanline caps!
+        let trunk_halo_count = (0..height)
+            .flat_map(|y| (30..width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let v = out[y * width + x];
+                v > 0 && v < 255
+            })
+            .count();
+        assert_eq!(trunk_halo_count, 0);
     }
 
     #[test]

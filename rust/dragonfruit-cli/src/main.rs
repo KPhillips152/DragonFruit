@@ -346,6 +346,24 @@ enum SliceCommands {
         /// Apply AA to support geometry
         #[arg(long)]
         aa_on_supports: bool,
+        /// Enable Support Halo (sub-cure radial halo around support cross-sections)
+        #[arg(long)]
+        support_halo: bool,
+        /// Support Halo radial reach in pixels (0-8)
+        #[arg(long, default_value = "0")]
+        support_halo_radius_px: u32,
+        /// Support Halo maximum cure intensity (percent, 0-100)
+        #[arg(long, default_value = "50.0")]
+        support_halo_max_intensity: f32,
+        /// Support Halo decay profile (linear, exponential, gaussian)
+        #[arg(long, default_value = "linear")]
+        support_halo_profile: String,
+        /// Support Halo scope (tips_only, full_support)
+        #[arg(long, default_value = "tips_only")]
+        support_halo_scope: String,
+        /// Support Halo maximum cross-section diameter in mm for tips_only scope (0.10-5.0)
+        #[arg(long, default_value = "0.75")]
+        support_halo_max_tip_diameter_mm: f32,
         /// X-axis sub-pixel packing mode.
         ///
         /// - `none` (default): raw grayscale at source resolution; width_px = source_width_px.
@@ -387,7 +405,10 @@ enum SliceCommands {
             "layer_height", "build_width_mm", "build_depth_mm", "source_width_px", "source_height_px",
             "png_compression", "anti_aliasing", "anti_aliasing_mode", "blur_brush_radius_px",
             "blur_brush_kernel", "blur_brush_sigma_x", "blur_brush_sigma_y", "z_blur_radius_layers",
-            "z_blur_kernel", "z_blur_sigma", "z_blend_look_back", "aa_on_supports", "x_packing_mode",
+            "z_blur_kernel", "z_blur_sigma", "z_blend_look_back", "aa_on_supports",
+            "support_halo", "support_halo_radius_px", "support_halo_max_intensity",
+            "support_halo_profile", "support_halo_scope", "support_halo_max_tip_diameter_mm",
+            "x_packing_mode",
             "mirror_x", "mirror_y", "format_version", "min_aa_alpha", "dither", "dither_bit_depth",
             "dither_device_gamma", "metadata_json",
         ])]
@@ -1160,6 +1181,12 @@ fn cmd_slice_run(
     z_blur_sigma: f32,
     z_blend_look_back: u32,
     aa_on_supports: bool,
+    support_halo: bool,
+    support_halo_radius_px: u32,
+    support_halo_max_intensity: f32,
+    support_halo_profile: &str,
+    support_halo_scope: &str,
+    support_halo_max_tip_diameter_mm: f32,
     x_packing_mode: &str,
     mirror_x: bool,
     mirror_y: bool,
@@ -1276,6 +1303,12 @@ fn cmd_slice_run(
             z_blur_kernel: z_blur_kernel.to_string(),
             z_blur_sigma: z_blur_sigma as f64,
             aa_on_supports,
+            support_halo_enabled: support_halo,
+            support_halo_radius_px,
+            support_halo_max_intensity_percent: support_halo_max_intensity,
+            support_halo_profile: support_halo_profile.to_string(),
+            support_halo_scope: support_halo_scope.to_string(),
+            support_halo_max_tip_diameter_mm,
             model_triangle_count: model_tri_count,
             mirror_x,
             mirror_y,
@@ -1376,6 +1409,14 @@ fn cmd_slice_run(
             "blur_brush_radius_px": job.blur_brush_radius_px,
             "z_blur_radius_layers": job.z_blur_radius_layers,
             "z_blend_look_back": job.z_blend_look_back },
+        "support_halo": {
+            "enabled": job.support_halo_enabled,
+            "radius_px": job.support_halo_radius_px,
+            "max_intensity_percent": job.support_halo_max_intensity_percent,
+            "profile": job.support_halo_profile,
+            "scope": job.support_halo_scope,
+            "max_tip_diameter_mm": job.support_halo_max_tip_diameter_mm
+        },
         "dither": { "enabled": job.dither_enabled, "bit_depth": job.dither_bit_depth, "device_gamma": job.dither_device_gamma },
         "total_s": perf.total_s(),
         "wall_s": wall_s,
@@ -1956,7 +1997,9 @@ fn main() {
                 source_width_px, source_height_px, png_compression, anti_aliasing,
                 anti_aliasing_mode, blur_brush_radius_px, blur_brush_kernel, blur_brush_sigma_x,
                 blur_brush_sigma_y, z_blur_radius_layers, z_blur_kernel, z_blur_sigma,
-                z_blend_look_back, aa_on_supports, x_packing_mode, mirror_x, mirror_y,
+                z_blend_look_back, aa_on_supports, support_halo, support_halo_radius_px,
+                support_halo_max_intensity, support_halo_profile, support_halo_scope,
+                support_halo_max_tip_diameter_mm, x_packing_mode, mirror_x, mirror_y,
                 format_version, min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
                 sample_interval_ms, metadata_json, job, json } =>
                 cmd_slice_run(&input, &output, layer_height, build_width_mm, build_depth_mm,
@@ -1964,6 +2007,8 @@ fn main() {
                     &anti_aliasing_mode, blur_brush_radius_px, &blur_brush_kernel,
                     blur_brush_sigma_x, blur_brush_sigma_y, z_blur_radius_layers,
                     &z_blur_kernel, z_blur_sigma, z_blend_look_back, aa_on_supports,
+                    support_halo, support_halo_radius_px, support_halo_max_intensity,
+                    &support_halo_profile, &support_halo_scope, support_halo_max_tip_diameter_mm,
                     &x_packing_mode, mirror_x, mirror_y, &format_version,
                     min_aa_alpha, dither, dither_bit_depth, dither_device_gamma,
                     sample_interval_ms, &metadata_json, &job, json),
@@ -1994,6 +2039,59 @@ fn main() {
             eprintln!("  [{}] FAILED {:.1}ms", command_label, elapsed_ms);
             eprintln!("Error: {}", e);
             std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn slice_run_parses_support_halo_flags() {
+        let cli = Cli::try_parse_from([
+            "dragonfruit-cli",
+            "slice",
+            "run",
+            "model.stl",
+            "-o",
+            "out.ctb",
+            "--support-halo",
+            "--support-halo-radius-px",
+            "5",
+            "--support-halo-max-intensity",
+            "62.5",
+            "--support-halo-profile",
+            "gaussian",
+            "--support-halo-scope",
+            "tips_only",
+            "--support-halo-max-tip-diameter-mm",
+            "0.85",
+        ])
+        .expect("should parse support halo CLI flags");
+
+        match cli.command {
+            Commands::Slice {
+                command:
+                    SliceCommands::Run {
+                        support_halo,
+                        support_halo_radius_px,
+                        support_halo_max_intensity,
+                        support_halo_profile,
+                        support_halo_scope,
+                        support_halo_max_tip_diameter_mm,
+                        ..
+                    },
+            } => {
+                assert!(support_halo);
+                assert_eq!(support_halo_radius_px, 5);
+                assert!((support_halo_max_intensity - 62.5).abs() < 1e-4);
+                assert_eq!(support_halo_profile, "gaussian");
+                assert_eq!(support_halo_scope, "tips_only");
+                assert!((support_halo_max_tip_diameter_mm - 0.85).abs() < 1e-4);
+            }
+            _ => panic!("expected SliceCommands::Run"),
         }
     }
 }

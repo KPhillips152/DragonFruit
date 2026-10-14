@@ -57,6 +57,22 @@ fn default_dither_device_gamma() -> f64 {
     3.0
 }
 
+fn default_support_halo_max_intensity_percent() -> f32 {
+    50.0
+}
+
+fn default_support_halo_profile() -> String {
+    "linear".to_string()
+}
+
+fn default_support_halo_scope() -> String {
+    "tips_only".to_string()
+}
+
+fn default_support_halo_max_tip_diameter_mm() -> f32 {
+    0.75
+}
+
 mod experiments;
 mod plugin_registry;
 mod webview_watchdog;
@@ -651,6 +667,18 @@ struct SliceJobMetadata {
     #[serde(default = "default_z_blur_sigma")]
     z_blur_sigma: f64,
     aa_on_supports: bool,
+    #[serde(default)]
+    support_halo_enabled: bool,
+    #[serde(default)]
+    support_halo_radius_px: u32,
+    #[serde(default = "default_support_halo_max_intensity_percent")]
+    support_halo_max_intensity_percent: f32,
+    #[serde(default = "default_support_halo_profile")]
+    support_halo_profile: String,
+    #[serde(default = "default_support_halo_scope")]
+    support_halo_scope: String,
+    #[serde(default = "default_support_halo_max_tip_diameter_mm")]
+    support_halo_max_tip_diameter_mm: f32,
     #[serde(default = "default_minimum_aa_alpha_percent")]
     minimum_aa_alpha_percent: f32,
     #[serde(default)]
@@ -1649,6 +1677,12 @@ async fn slice_solid_native_to_temp_path(
             z_blur_kernel: meta.z_blur_kernel,
             z_blur_sigma: meta.z_blur_sigma,
             aa_on_supports: meta.aa_on_supports,
+            support_halo_enabled: meta.support_halo_enabled,
+            support_halo_radius_px: meta.support_halo_radius_px,
+            support_halo_max_intensity_percent: meta.support_halo_max_intensity_percent,
+            support_halo_profile: meta.support_halo_profile,
+            support_halo_scope: meta.support_halo_scope,
+            support_halo_max_tip_diameter_mm: meta.support_halo_max_tip_diameter_mm,
             model_triangle_count: meta.model_triangle_count,
             minimum_aa_alpha_percent: meta.minimum_aa_alpha_percent,
             mirror_x: meta.mirror_x,

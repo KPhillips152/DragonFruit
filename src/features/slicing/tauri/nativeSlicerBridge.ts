@@ -43,6 +43,12 @@ export type NativeSolidSliceJobEnvelope = {
   zaaPattern?: 'uniform' | 'halton' | 'base2';
   zaaDuplicateZ?: boolean;
   modelTriangleCount: number;
+  supportHaloEnabled?: boolean;
+  supportHaloRadiusPx?: number;
+  supportHaloMaxIntensityPercent?: number;
+  supportHaloProfile?: 'linear' | 'exponential' | 'gaussian';
+  supportHaloScope?: 'tips_only' | 'full_supports';
+  supportHaloMaxTipDiameterMm?: number;
   containerCompressionLevel?: number;
   buildWidthMm: number;
   buildDepthMm: number;
@@ -97,6 +103,12 @@ type NativeSolidSliceMetadataPayload = {
   zaa_pattern?: 'uniform' | 'halton' | 'base2';
   zaa_duplicate_z?: boolean;
   model_triangle_count: number;
+  support_halo_enabled: boolean;
+  support_halo_radius_px: number;
+  support_halo_max_intensity_percent: number;
+  support_halo_profile: 'linear' | 'exponential' | 'gaussian';
+  support_halo_scope: 'tips_only' | 'full_supports';
+  support_halo_max_tip_diameter_mm: number;
   container_compression_level: number;
   build_width_mm: number;
   build_depth_mm: number;
@@ -136,7 +148,6 @@ function createAbortError(message = 'Slicing canceled by user.'): Error {
   error.name = 'AbortError';
   return error;
 }
-
 
 async function loadTauriCore(): Promise<TauriCoreModule | null> {
   if (!isTauriRuntime()) return null;
@@ -199,6 +210,18 @@ export function toNativeMetadataPayload(job: NativeSolidSliceJobEnvelope): Nativ
     zaa_pattern: job.zaaPattern,
     zaa_duplicate_z: job.zaaDuplicateZ,
     model_triangle_count: clampSliceJobNumber('modelTriangleCount', job.modelTriangleCount),
+    support_halo_enabled: job.supportHaloEnabled ?? false,
+    support_halo_radius_px: clampSliceJobNumber('supportHaloRadiusPx', job.supportHaloRadiusPx),
+    support_halo_max_intensity_percent: clampSliceJobNumber(
+      'supportHaloMaxIntensityPercent',
+      job.supportHaloMaxIntensityPercent
+    ),
+    support_halo_profile: job.supportHaloProfile ?? 'linear',
+    support_halo_scope: job.supportHaloScope ?? 'tips_only',
+    support_halo_max_tip_diameter_mm: clampSliceJobNumber(
+      'supportHaloMaxTipDiameterMm',
+      job.supportHaloMaxTipDiameterMm
+    ),
     container_compression_level: clampSliceJobNumber('containerCompressionLevel', job.containerCompressionLevel),
     build_width_mm: job.buildWidthMm,
     build_depth_mm: job.buildDepthMm,

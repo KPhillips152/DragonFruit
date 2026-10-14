@@ -232,30 +232,13 @@ fn rasterize_layer_rle_with_support_split(
     compute_area_stats: bool,
     model_triangle_count: usize,
 ) -> (Vec<RleRun>, Option<Vec<RleRun>>, LayerAreaStatsV3) {
-    let total_triangles = triangles.len();
-    let model_tri = (job.model_triangle_count as usize).min(total_triangles);
-    let tip_start = job.support_tip_start_triangle as usize;
-    let halo_start_tri = if job.support_halo_active() {
-        if job.support_halo_is_tips_only() && tip_start > model_tri {
-            tip_start.min(total_triangles)
-        } else {
-            model_tri
-        }
-    } else {
-        total_triangles
-    };
-    let aa_end_tri = model_triangle_count.min(halo_start_tri);
-
     let mut model_layer_indices = Vec::with_capacity(layer_candidates.len());
-    let mut support_body_indices = Vec::with_capacity(layer_candidates.len());
-    let mut support_halo_indices = Vec::with_capacity(layer_candidates.len());
+    let mut support_layer_indices = Vec::with_capacity(layer_candidates.len());
     for &candidate in layer_candidates {
-        if candidate < aa_end_tri {
+        if candidate < model_triangle_count {
             model_layer_indices.push(candidate);
-        } else if candidate < halo_start_tri {
-            support_body_indices.push(candidate);
         } else {
-            support_halo_indices.push(candidate);
+            support_layer_indices.push(candidate);
         }
     }
 
@@ -266,7 +249,7 @@ fn rasterize_layer_rle_with_support_split(
     model_job.support_halo_enabled = false;
     model_job.support_halo_radius_px = 0;
 
-    if support_body_indices.is_empty() && support_halo_indices.is_empty() {
+    if support_layer_indices.is_empty() {
         let (runs, stats) = rasterize_layer_rle(
             &model_job,
             triangles,
@@ -298,31 +281,20 @@ fn rasterize_layer_rle_with_support_split(
     support_job.blur_brush_radius_px = 0;
     support_job.minimum_aa_alpha_percent = 100.0;
 
-    let body_super_runs = (!support_body_indices.is_empty()).then(|| {
-        rasterize_layer_rle(&support_job, triangles, &support_body_indices, layer, false).0
-    });
-    let halo_super_runs = (!support_halo_indices.is_empty()).then(|| {
-        rasterize_layer_rle(&support_job, triangles, &support_halo_indices, layer, false).0
-    });
-
-    let raw_support_super_runs = match (&body_super_runs, &halo_super_runs) {
-        (Some(b), Some(h)) => merge_rle_max(b, h),
-        (Some(b), None) => b.clone(),
-        (None, Some(h)) => h.clone(),
-        (None, None) => unreachable!(),
-    };
+    let mut support_runs =
+        rasterize_layer_rle(&support_job, triangles, &support_layer_indices, layer, false).0;
 
     let stats = if compute_area_stats {
         let merged_runs = if model_layer_indices.is_empty() {
-            raw_support_super_runs.clone()
+            support_runs.clone()
         } else {
-            merge_rle_max(&model_runs, &raw_support_super_runs)
+            merge_rle_max(&model_runs, &support_runs)
         };
         recompute_layer_stats_from_rle(&merged_runs, width, height, pixel_area_mm2, true)
     } else if model_layer_indices.is_empty() {
         compute_rle_max_basic_stats(
-            &raw_support_super_runs,
-            &raw_support_super_runs,
+            &support_runs,
+            &support_runs,
             width,
             height,
             pixel_area_mm2,
@@ -330,7 +302,7 @@ fn rasterize_layer_rle_with_support_split(
     } else {
         compute_rle_max_basic_stats(
             &model_runs,
-            &raw_support_super_runs,
+            &support_runs,
             width,
             height,
             pixel_area_mm2,
@@ -345,47 +317,27 @@ fn rasterize_layer_rle_with_support_split(
     let out_width = width / ssaa_factor;
     let out_height = height / ssaa_factor;
 
-    let body_out_runs = body_super_runs.map(|runs| {
-        if ssaa_factor > 1 {
-            crate::raster::downsample_binary_rle_to_gray_rle(
-                &runs,
-                width,
-                height,
-                ssaa_factor,
-                255,
-            )
-        } else {
-            runs
-        }
-    });
-    let halo_out_runs = halo_super_runs.map(|runs| {
-        let downsampled = if ssaa_factor > 1 {
-            crate::raster::downsample_binary_rle_to_gray_rle(
-                &runs,
-                width,
-                height,
-                ssaa_factor,
-                255,
-            )
-        } else {
-            runs
-        };
-        crate::raster::apply_euclidean_radial_halo_rle(
-            &downsampled,
+    if ssaa_factor > 1 {
+        support_runs = crate::raster::downsample_binary_rle_to_gray_rle(
+            &support_runs,
+            width,
+            height,
+            ssaa_factor,
+            255,
+        );
+    }
+
+    if job.support_halo_active() {
+        support_runs = crate::raster::apply_euclidean_radial_halo_rle(
+            &support_runs,
             out_width,
             out_height,
             job.effective_support_halo_radius_px(),
             job.effective_support_halo_max_intensity_u8(),
             crate::raster::SupportHaloProfile::from_str_lossy(&job.support_halo_profile),
-        )
-    });
-
-    let support_runs = match (body_out_runs, halo_out_runs) {
-        (Some(b), Some(h)) => merge_rle_max(&b, &h),
-        (Some(b), None) => b,
-        (None, Some(h)) => h,
-        (None, None) => unreachable!(),
-    };
+            job.effective_support_halo_max_tip_diameter_px(),
+        );
+    }
 
     (model_runs, Some(support_runs), stats)
 }

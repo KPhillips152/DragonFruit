@@ -10,6 +10,12 @@ test('holds each field to its own bounds', () => {
   assert.equal(clampSliceJobNumber('blurBrushSigmaX', 0), 0.05);
   assert.equal(clampSliceJobNumber('blurBrushSigmaX', 1000), 16);
   assert.equal(clampSliceJobNumber('zBlendMaxAlphaPercent', 150), 100);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', 25), 8);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', -2), 0);
+  assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', 140), 100);
+  assert.equal(clampSliceJobNumber('supportHaloMaxIntensityPercent', -5), 0);
+  assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', 0.01), 0.1);
+  assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', 9.0), 5.0);
 });
 
 test('snaps before applying the bounds', () => {
@@ -18,11 +24,13 @@ test('snaps before applying the bounds', () => {
   assert.equal(clampSliceJobNumber('zBlurRadiusLayers', 8.6), 8);
   assert.equal(clampSliceJobNumber('modelTriangleCount', 12.9), 12);
   assert.equal(clampSliceJobNumber('blurBrushRadiusPx', 2.5), 3);
+  assert.equal(clampSliceJobNumber('supportHaloRadiusPx', 3.6), 4);
 });
 
 test('leaves unsnapped fields fractional', () => {
   assert.equal(clampSliceJobNumber('zBlurSigma', 1.25), 1.25);
   assert.equal(clampSliceJobNumber('zBlendMinimumAlphaPercent', 33.5), 33.5);
+  assert.equal(clampSliceJobNumber('supportHaloMaxTipDiameterMm', 0.75), 0.75);
 });
 
 test('substitutes the fallback for a missing or non-numeric input', () => {

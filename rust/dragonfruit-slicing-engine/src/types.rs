@@ -93,6 +93,10 @@ fn default_support_halo_scope() -> String {
     "tips_only".to_string()
 }
 
+fn default_support_halo_max_tip_diameter_mm() -> f32 {
+    0.75
+}
+
 fn dynamic_minimum_alpha_lut(percent: f32) -> Option<[u8; 256]> {
     let min_alpha = ((percent.clamp(0.0, 100.0) / 100.0) * 255.0).round() as u8;
     if min_alpha == 0 {
@@ -220,10 +224,9 @@ pub struct SliceJobV3 {
     /// Target support geometry scope (`tips_only`, `full_supports`).
     #[serde(default = "default_support_halo_scope")]
     pub support_halo_scope: String,
-    /// Start triangle index of support contact tips at the tail of `triangles_xyz`.
-    /// When `0`, `tips_only` falls back to `model_triangle_count`.
-    #[serde(default)]
-    pub support_tip_start_triangle: u32,
+    /// Maximum cross-section diameter (in millimeters) for `tips_only` support halo gating.
+    #[serde(default = "default_support_halo_max_tip_diameter_mm")]
+    pub support_halo_max_tip_diameter_mm: f32,
     /// Minimum grayscale alpha (0-100%) for non-zero AA pixels.
     ///
     /// When no explicit custom cure LUT is provided, the engine turns this
@@ -324,7 +327,7 @@ impl Default for SliceJobV3 {
             support_halo_max_intensity_percent: default_support_halo_max_intensity_percent(),
             support_halo_profile: default_support_halo_profile(),
             support_halo_scope: default_support_halo_scope(),
-            support_tip_start_triangle: 0,
+            support_halo_max_tip_diameter_mm: default_support_halo_max_tip_diameter_mm(),
             minimum_aa_alpha_percent: 0.0,
             mirror_x: false,
             mirror_y: false,
@@ -429,41 +432,62 @@ impl SliceJobV3 {
             .eq_ignore_ascii_case("full_supports")
     }
 
-    /// Computes `(aa_end_tri, halo_start_tri)` when support triangles require
-    /// a separate binary and/or Euclidean radial halo pass.
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_mm(&self) -> f32 {
+        if self.support_halo_max_tip_diameter_mm.is_finite() {
+            self.support_halo_max_tip_diameter_mm.clamp(0.10, 5.0)
+        } else {
+            default_support_halo_max_tip_diameter_mm()
+        }
+    }
+
+    #[inline]
+    pub fn effective_support_halo_max_tip_diameter_px(&self) -> Option<u32> {
+        if !self.support_halo_is_tips_only() {
+            return None;
+        }
+        let d_mm = self.effective_support_halo_max_tip_diameter_mm();
+        let ssaa_factor = if self.height_px > 0 && self.source_height_px >= self.height_px {
+            (self.source_height_px / self.height_px).max(1)
+        } else {
+            1
+        };
+        let out_w = (self.source_width_px / ssaa_factor) as f32;
+        let out_h = (self.source_height_px / ssaa_factor) as f32;
+        let pitch_x = if self.build_width_mm > 0.0 && out_w > 0.0 {
+            self.build_width_mm / out_w
+        } else {
+            0.05
+        };
+        let pitch_y = if self.build_depth_mm > 0.0 && out_h > 0.0 {
+            self.build_depth_mm / out_h
+        } else {
+            pitch_x
+        };
+        let pitch = pitch_x.min(pitch_y).max(0.005);
+        let max_px = (d_mm / pitch).ceil().max(1.0) as u32;
+        Some(max_px)
+    }
+
+    /// Computes `model_triangle_count` when support triangles require a
+    /// separate binary and/or Euclidean radial halo pass.
     ///
-    /// - `[0 .. aa_end_tri)`: Model pass (uses job AA / blur / 3DAA settings)
-    /// - `[aa_end_tri .. halo_start_tri)`: Support body binary pass (`255`, no AA, no halo)
-    /// - `[halo_start_tri .. total_triangles)`: Support halo pass (`255` core + radial halo)
+    /// - `[0 .. model_tri)`: Model pass (uses job AA / blur / 3DAA settings)
+    /// - `[model_tri .. total_triangles)`: Unified support pass (`255` core + optional radial halo)
     #[inline]
     pub fn support_split_triangle_bounds(
         &self,
         total_triangles: usize,
         model_aa_active: bool,
-    ) -> Option<(usize, usize)> {
+    ) -> Option<usize> {
         let model_tri = self.model_triangle_count as usize;
         if model_tri == 0 || model_tri >= total_triangles {
             return None;
         }
-        let tip_start = self.support_tip_start_triangle as usize;
-        let halo_start_tri = if self.support_halo_active() {
-            if self.support_halo_is_tips_only() && tip_start > model_tri {
-                tip_start.min(total_triangles)
-            } else {
-                model_tri
-            }
+        if (model_aa_active && !self.aa_on_supports) || self.support_halo_active() {
+            Some(model_tri)
         } else {
-            total_triangles
-        };
-        let aa_end_tri = if model_aa_active && !self.aa_on_supports {
-            model_tri
-        } else {
-            halo_start_tri
-        };
-        if aa_end_tri >= total_triangles && halo_start_tri >= total_triangles {
             None
-        } else {
-            Some((aa_end_tri, halo_start_tri))
         }
     }
 
