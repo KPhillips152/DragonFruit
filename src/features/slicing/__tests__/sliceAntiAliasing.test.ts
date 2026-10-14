@@ -3,16 +3,24 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import type { MaterialAntiAliasingSettings, MaterialProfile, PrinterProfile } from '@/features/profiles/profileStore';
+import {
+  sanitizeMaterialAntiAliasingSettings,
+  type MaterialAntiAliasingSettings,
+  type MaterialProfile,
+  type PrinterProfile,
+} from '@/features/profiles/profileStore';
 import { computePhysicalAaConfig } from '../autoAaPhysics';
 import { DEFAULT_CLEAR_EXP_100_CURVE, DEFAULT_OPAQUE_EXP_120_230_CURVE, sampleCurveToLut, type SavedCurve } from '../lutCurves';
+import { resolveEffectiveAaSettings } from '../resolveEffectiveAaSettings';
 import {
   resolvePixelPitchMm,
   resolveSliceAntiAliasing,
+  resolveSliceJobAntiAliasing,
   type AaAutoPresetChoice,
   type SliceAntiAliasingInput,
   type SliceAntiAliasingOverride,
 } from '../sliceAntiAliasing';
+import { assembleSliceJob, buildNativeSliceJob } from '../sliceJobAssembly';
 import { MATERIALS, PRINTERS, appMaterial, material } from './helpers/sliceJobFixtures';
 
 /**
@@ -238,3 +246,118 @@ test('LUT plus Blur zeroes the minimum alpha the engine is sent', () => {
   })).options;
   assert.equal(minimum.minimumAaAlphaPercentOverride, 40);
 });
+
+test('sanitizeMaterialAntiAliasingSettings populates defaults and clamps Support Halo fields', () => {
+  const defaults = sanitizeMaterialAntiAliasingSettings({});
+  assert.equal(defaults.supportHaloEnabled, false);
+  assert.equal(defaults.supportHaloRadiusPx, 2);
+  assert.equal(defaults.supportHaloMaxIntensityPercent, 50);
+  assert.equal(defaults.supportHaloProfile, 'linear');
+  assert.equal(defaults.supportHaloScope, 'tips_only');
+  assert.equal(defaults.supportHaloMaxTipDiameterMm, 0.75);
+
+  const clampedHigh = sanitizeMaterialAntiAliasingSettings({
+    supportHaloEnabled: true,
+    supportHaloRadiusPx: 99,
+    supportHaloMaxIntensityPercent: 250,
+    supportHaloProfile: 'exponential',
+    supportHaloScope: 'full_supports',
+    supportHaloMaxTipDiameterMm: 12.5,
+  });
+  assert.equal(clampedHigh.supportHaloEnabled, true);
+  assert.equal(clampedHigh.supportHaloRadiusPx, 8);
+  assert.equal(clampedHigh.supportHaloMaxIntensityPercent, 100);
+  assert.equal(clampedHigh.supportHaloProfile, 'exponential');
+  assert.equal(clampedHigh.supportHaloScope, 'full_supports');
+  assert.equal(clampedHigh.supportHaloMaxTipDiameterMm, 5.0);
+
+  const clampedLow = sanitizeMaterialAntiAliasingSettings({
+    supportHaloEnabled: false,
+    supportHaloRadiusPx: -3,
+    supportHaloMaxIntensityPercent: -15,
+    supportHaloProfile: 'invalid-profile',
+    supportHaloScope: 'invalid-scope',
+    supportHaloMaxTipDiameterMm: 0.01,
+  });
+  assert.equal(clampedLow.supportHaloEnabled, false);
+  assert.equal(clampedLow.supportHaloRadiusPx, 0);
+  assert.equal(clampedLow.supportHaloMaxIntensityPercent, 0);
+  assert.equal(clampedLow.supportHaloProfile, 'linear');
+  assert.equal(clampedLow.supportHaloScope, 'tips_only');
+  assert.equal(clampedLow.supportHaloMaxTipDiameterMm, 0.1);
+});
+
+test('Support Halo settings propagate across resolveEffectiveAaSettings, resolveSliceAntiAliasing, resolveSliceJobAntiAliasing, and buildNativeSliceJob even when preset is raw (Off)', () => {
+  const { printer, material: baseMaterial } = fixtureFor(SATURN_4);
+  const haloOverrides = {
+    supportHaloEnabled: true,
+    supportHaloRadiusPx: 4,
+    supportHaloMaxIntensityPercent: 65,
+    supportHaloProfile: 'gaussian' as const,
+    supportHaloScope: 'full_supports' as const,
+    supportHaloMaxTipDiameterMm: 0.9,
+  };
+  const materialProfile: MaterialProfile = {
+    ...baseMaterial,
+    antiAliasingSettings: {
+      ...baseMaterial.antiAliasingSettings,
+      ...haloOverrides,
+    },
+  };
+
+  const effective = resolveEffectiveAaSettings(materialProfile.antiAliasingSettings, 0.05, 0.05, 0.05, 'raw');
+  assert.equal(effective.mode, 'Off');
+  assert.equal(effective.supportHaloEnabled, true);
+  assert.equal(effective.supportHaloRadiusPx, 4);
+  assert.equal(effective.supportHaloMaxIntensityPercent, 65);
+  assert.equal(effective.supportHaloProfile, 'gaussian');
+  assert.equal(effective.supportHaloScope, 'full_supports');
+  assert.equal(effective.supportHaloMaxTipDiameterMm, 0.9);
+
+  const sliceAa = resolveSliceAntiAliasing(input({
+    printerProfile: printer,
+    materialProfile,
+    preset: 'raw',
+  }));
+  assert.equal(sliceAa.options.antiAliasingLevel, 'Off');
+  assert.equal(sliceAa.options.supportHaloEnabled, true);
+  assert.equal(sliceAa.options.supportHaloRadiusPx, 4);
+  assert.equal(sliceAa.options.supportHaloMaxIntensityPercent, 65);
+  assert.equal(sliceAa.options.supportHaloProfile, 'gaussian');
+  assert.equal(sliceAa.options.supportHaloScope, 'full_supports');
+  assert.equal(sliceAa.options.supportHaloMaxTipDiameterMm, 0.9);
+
+  const jobAa = resolveSliceJobAntiAliasing({
+    printerProfile: printer,
+    materialProfile,
+    layerHeightMm: 0.05,
+    request: { preset: 'raw', override: null },
+  });
+  assert.equal(jobAa.antiAliasingLevel, 'Off');
+  assert.equal(jobAa.supportHaloEnabled, true);
+  assert.equal(jobAa.supportHaloRadiusPx, 4);
+  assert.equal(jobAa.supportHaloMaxIntensityPercent, 65);
+  assert.equal(jobAa.supportHaloProfile, 'gaussian');
+  assert.equal(jobAa.supportHaloScope, 'full_supports');
+  assert.equal(jobAa.supportHaloMaxTipDiameterMm, 0.9);
+
+  const assembled = assembleSliceJob({
+    printerProfile: printer,
+    materialProfile,
+    scene: { totalLayers: 100, tallestObjectHeightMm: 5, models: [] },
+    antiAliasing: { preset: 'raw', override: null },
+  });
+  const nativeJob = buildNativeSliceJob(assembled, {
+    pngCompressionMode: 'auto',
+    aaOnSupportsFallback: false,
+    modelTriangleCount: 12,
+  });
+  assert.equal(nativeJob.antiAliasingLevel, 'Off');
+  assert.equal(nativeJob.supportHaloEnabled, true);
+  assert.equal(nativeJob.supportHaloRadiusPx, 4);
+  assert.equal(nativeJob.supportHaloMaxIntensityPercent, 65);
+  assert.equal(nativeJob.supportHaloProfile, 'gaussian');
+  assert.equal(nativeJob.supportHaloScope, 'full_supports');
+  assert.equal(nativeJob.supportHaloMaxTipDiameterMm, 0.9);
+});
+

@@ -256,6 +256,12 @@ export type MaterialAntiAliasingSettings = {
     tipOffsetMm: number;
     tipOffsetDisplayInUi: boolean;
     supportTipShrinkPercent: number;
+    supportHaloEnabled: boolean;
+    supportHaloRadiusPx: number;
+    supportHaloMaxIntensityPercent: number;
+    supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+    supportHaloScope: 'tips_only' | 'full_supports';
+    supportHaloMaxTipDiameterMm: number;
 };
 
 export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettings = {
@@ -289,6 +295,12 @@ export const DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS: MaterialAntiAliasingSettin
     tipOffsetMm: 0.05,
     tipOffsetDisplayInUi: false,
     supportTipShrinkPercent: 10,
+    supportHaloEnabled: false,
+    supportHaloRadiusPx: 2,
+    supportHaloMaxIntensityPercent: 50,
+    supportHaloProfile: 'linear',
+    supportHaloScope: 'tips_only',
+    supportHaloMaxTipDiameterMm: 0.75,
 };
 
 const MATERIAL_PROFILE_LOCAL_OVERRIDE_KEYS = new Set<keyof MaterialProfile>([
@@ -349,7 +361,7 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
     return Math.max(min, Math.min(max, numeric));
 }
 
-function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
+export function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAliasingSettings {
     const source = (input && typeof input === 'object') ? input as Record<string, unknown> : {};
     const defaults = DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS;
     const mode = source.mode === 'Off' || source.mode === '3DAA' ? source.mode : defaults.mode;
@@ -371,6 +383,12 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
     const tipOffsetMode = source.tipOffsetMode === 'auto' || source.tipOffsetMode === 'manual' || source.tipOffsetMode === 'disabled'
         ? source.tipOffsetMode
         : defaults.tipOffsetMode;
+    const supportHaloProfile = source.supportHaloProfile === 'exponential' || source.supportHaloProfile === 'gaussian'
+        ? source.supportHaloProfile
+        : defaults.supportHaloProfile;
+    const supportHaloScope = source.supportHaloScope === 'full_supports'
+        ? 'full_supports'
+        : defaults.supportHaloScope;
 
     const enableCustomSettings = typeof source.enableCustomSettings === 'boolean'
         ? source.enableCustomSettings
@@ -411,6 +429,20 @@ function sanitizeMaterialAntiAliasingSettings(input: unknown): MaterialAntiAlias
         supportTipShrinkPercent: source.supportTipShrinkPercent == null
             ? defaults.supportTipShrinkPercent
             : Math.round(clampNumber(source.supportTipShrinkPercent, defaults.supportTipShrinkPercent, 0, 90)),
+        supportHaloEnabled: typeof source.supportHaloEnabled === 'boolean'
+            ? source.supportHaloEnabled
+            : defaults.supportHaloEnabled,
+        supportHaloRadiusPx: source.supportHaloRadiusPx == null
+            ? defaults.supportHaloRadiusPx
+            : Math.round(clampNumber(source.supportHaloRadiusPx, defaults.supportHaloRadiusPx, 0, 8)),
+        supportHaloMaxIntensityPercent: source.supportHaloMaxIntensityPercent == null
+            ? defaults.supportHaloMaxIntensityPercent
+            : clampNumber(source.supportHaloMaxIntensityPercent, defaults.supportHaloMaxIntensityPercent, 0, 100),
+        supportHaloProfile,
+        supportHaloScope,
+        supportHaloMaxTipDiameterMm: source.supportHaloMaxTipDiameterMm == null
+            ? defaults.supportHaloMaxTipDiameterMm
+            : clampNumber(source.supportHaloMaxTipDiameterMm, defaults.supportHaloMaxTipDiameterMm, 0.1, 5.0),
     };
 }
 

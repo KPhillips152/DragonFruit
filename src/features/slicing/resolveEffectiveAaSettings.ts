@@ -15,6 +15,12 @@ export interface EffectiveAaSettings {
     aaOnSupports: boolean;
     tipOffsetMm: number;
     tipOffsetMode: 'disabled' | 'auto' | 'manual';
+    supportHaloEnabled: boolean;
+    supportHaloRadiusPx: number;
+    supportHaloMaxIntensityPercent: number;
+    supportHaloProfile: 'linear' | 'exponential' | 'gaussian';
+    supportHaloScope: 'tips_only' | 'full_supports';
+    supportHaloMaxTipDiameterMm: number;
 }
 
 /**
@@ -26,14 +32,41 @@ export function resolveEffectiveAaSettings(
     layerHeightMm: number,
     pixelPitchMm: number,
     pixelPitchYMm: number = pixelPitchMm,
-    activePreset: AaPreset = 'balanced',
+    activePreset: AaPreset | 'raw' = 'balanced',
 ): EffectiveAaSettings {
     const safeLayerH = Math.max(0.001, layerHeightMm);
     const safePitchX = Math.max(0.0001, pixelPitchMm);
     const safePitchY = Math.max(0.0001, pixelPitchYMm);
 
     // Baseline physical auto configuration
-    const autoCfg = computePhysicalAaConfig(activePreset, safePitchX, safeLayerH, safePitchY);
+    const autoCfg = activePreset === 'raw'
+        ? {
+            aaMode: 'Off' as const,
+            aaSteps: 0,
+            blurBrushRadiusPx: 0,
+            zBlurRadiusLayers: 0,
+            zBlendLookBack: 0,
+        }
+        : computePhysicalAaConfig(activePreset, safePitchX, safeLayerH, safePitchY);
+
+    const supportHaloEnabled = Boolean(settings.supportHaloEnabled);
+    const supportHaloRadiusPx = settings.supportHaloRadiusPx != null && Number.isFinite(Number(settings.supportHaloRadiusPx))
+        ? Math.max(0, Math.min(8, Math.round(Number(settings.supportHaloRadiusPx))))
+        : 2;
+    const supportHaloMaxIntensityPercent = settings.supportHaloMaxIntensityPercent != null && Number.isFinite(Number(settings.supportHaloMaxIntensityPercent))
+        ? Math.max(0, Math.min(100, Number(settings.supportHaloMaxIntensityPercent)))
+        : 50;
+    const supportHaloProfile: 'linear' | 'exponential' | 'gaussian' =
+        settings.supportHaloProfile === 'exponential' || settings.supportHaloProfile === 'gaussian'
+            ? settings.supportHaloProfile
+            : 'linear';
+    const supportHaloScope: 'tips_only' | 'full_supports' =
+        settings.supportHaloScope === 'full_supports'
+            ? 'full_supports'
+            : 'tips_only';
+    const supportHaloMaxTipDiameterMm = settings.supportHaloMaxTipDiameterMm != null && Number.isFinite(Number(settings.supportHaloMaxTipDiameterMm))
+        ? Math.max(0.1, Math.min(5.0, Number(settings.supportHaloMaxTipDiameterMm)))
+        : 0.75;
 
     const enableCustom = Boolean(settings.enableCustomSettings);
     const enableOverride = enableCustom && Boolean(settings.enableOverride);
@@ -55,6 +88,12 @@ export function resolveEffectiveAaSettings(
             aaOnSupports: Boolean(settings.aaOnSupports),
             tipOffsetMm: autoTipOffset,
             tipOffsetMode: 'auto',
+            supportHaloEnabled,
+            supportHaloRadiusPx,
+            supportHaloMaxIntensityPercent,
+            supportHaloProfile,
+            supportHaloScope,
+            supportHaloMaxTipDiameterMm,
         };
     }
 
@@ -110,5 +149,12 @@ export function resolveEffectiveAaSettings(
         aaOnSupports: Boolean(settings.aaOnSupports),
         tipOffsetMm: effectiveTipOffset,
         tipOffsetMode: settings.tipOffsetMode ?? 'auto',
+        supportHaloEnabled,
+        supportHaloRadiusPx,
+        supportHaloMaxIntensityPercent,
+        supportHaloProfile,
+        supportHaloScope,
+        supportHaloMaxTipDiameterMm,
     };
 }
+
