@@ -185,7 +185,8 @@ export type SliceExportResult = {
             zaaDuplicateZ?: boolean;
             modelTriangleCount: number;
             supportHaloEnabled: boolean;
-            supportHaloRadiusPx: number;
+            supportHaloRadiusMm: number;
+            supportHaloInverseScalePercent: number;
             supportHaloMaxIntensityPercent: number;
             supportHaloProfile: 'donut' | 'linear' | 'exponential' | 'gaussian';
             supportHaloScope: 'tips_only' | 'full_supports';
@@ -600,7 +601,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         zaaPattern: nativeJob.zaaPattern,
         zaaDuplicateZ: nativeJob.zaaDuplicateZ,
         supportHaloEnabled: nativeJob.supportHaloEnabled,
-        supportHaloRadiusPx: nativeJob.supportHaloRadiusPx,
+        supportHaloRadiusMm: nativeJob.supportHaloRadiusMm,
+        supportHaloInverseScalePercent: nativeJob.supportHaloInverseScalePercent,
         supportHaloMaxIntensityPercent: nativeJob.supportHaloMaxIntensityPercent,
         supportHaloProfile: nativeJob.supportHaloProfile,
         supportHaloScope: nativeJob.supportHaloScope,
@@ -701,7 +703,8 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
                 zaaDuplicateZ: nativeJob.zaaDuplicateZ,
                 modelTriangleCount: nativeJob.modelTriangleCount,
                 supportHaloEnabled: nativeJob.supportHaloEnabled,
-                supportHaloRadiusPx: nativeJob.supportHaloRadiusPx,
+                supportHaloRadiusMm: nativeJob.supportHaloRadiusMm,
+                supportHaloInverseScalePercent: nativeJob.supportHaloInverseScalePercent,
                 supportHaloMaxIntensityPercent: nativeJob.supportHaloMaxIntensityPercent,
                 supportHaloProfile: nativeJob.supportHaloProfile,
                 supportHaloScope: nativeJob.supportHaloScope,
