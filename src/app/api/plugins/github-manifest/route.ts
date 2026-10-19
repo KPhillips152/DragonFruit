@@ -41,7 +41,9 @@ function optionalHttpUrl(value: unknown): string | undefined {
 }
 
 function parseOutputFormat(value: unknown): string {
-  return normalizeOutputFormat(value);
+  // A manifest that declares no usable format declares no format; the caller
+  // renders it as an unresolved one rather than as someone else's format.
+  return normalizeOutputFormat(value) ?? '';
 }
 
 function parseNetworkSupport(value: unknown): string | undefined {
@@ -100,6 +102,15 @@ function sanitizePrinterPreset(input: unknown, baseRawDir: string) {
     },
     networkSupport: parseNetworkSupport(value.networkSupport),
     networkFilter: boundedString((value as any).networkFilter, 120) || undefined,
+    modelVariants: Array.isArray((value as any).modelVariants)
+      ? ((value as any).modelVariants as unknown[])
+        .slice(0, 32)
+        .map((id) => boundedString(id, 120))
+        .filter((id) => id.length > 0)
+      : undefined,
+    modelVariantDetectPath: boundedString((value as any).modelVariantDetectPath, 240) || undefined,
+    libraryDisplayName: boundedString((value as any).libraryDisplayName, 120) || undefined,
+    isModelVariant: typeof value.isModelVariant === 'boolean' ? value.isModelVariant : undefined,
   };
 }
 

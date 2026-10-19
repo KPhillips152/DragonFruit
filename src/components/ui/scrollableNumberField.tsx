@@ -1,6 +1,9 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { IconButton, cn } from '@/components/ui/primitives';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { IconButton, cn } from '@/components/atoms';
 import { Minus, Plus } from 'lucide-react';
+import { wheelStepDirection } from '@/components/ui/wheelStepDirection';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+import { clamp } from '@/utils/math';
 
 interface ScrollableNumberFieldProps {
   value: number;
@@ -16,6 +19,13 @@ interface ScrollableNumberFieldProps {
   commitOnBlur?: boolean;
   className?: string;
   inputClassName?: string;
+  /**
+   * Shrink everything — 24px steppers, a shorter input, smaller type — for the
+   * side panels that put two of these on one row. At full size the pair doesn't
+   * fit: the steppers eat the width and the value ends up printed on top of the
+   * unit.
+   */
+  compact?: boolean;
 }
 
 export function ScrollableNumberField({
@@ -32,23 +42,25 @@ export function ScrollableNumberField({
   commitOnBlur = false,
   className,
   inputClassName,
+  compact = false,
 }: ScrollableNumberFieldProps) {
+  const fmt = useLocaleFormat();
   const clampValue = useCallback((candidate: number): number => {
     const boundedMin = Number.isFinite(min) ? min : Number.NEGATIVE_INFINITY;
     const boundedMax = Number.isFinite(max) ? max : Number.POSITIVE_INFINITY;
-    return Math.max(boundedMin, Math.min(boundedMax, candidate));
+    return clamp(candidate, boundedMin, boundedMax);
   }, [max, min]);
 
   const normalizeStep = Number.isFinite(step) && step > 0 ? step : 1;
 
   const formatValue = useCallback((candidate: number): string => {
     if (!Number.isFinite(candidate)) return '';
-    const normalized = Number(candidate.toFixed(6));
-    return String(normalized);
-  }, []);
+    return fmt.field(candidate, 6);
+  }, [fmt]);
 
   const [draftValue, setDraftValue] = useState<string>(() => formatValue(clampValue(value)));
   const isEditingRef = useRef(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (isEditingRef.current) return;
@@ -56,7 +68,7 @@ export function ScrollableNumberField({
   }, [clampValue, formatValue, value]);
 
   const commitFromRaw = useCallback((raw: string): boolean => {
-    const parsed = Number(raw);
+    const parsed = fmt.parse(raw);
     if (!Number.isFinite(parsed)) {
       return false;
     }
@@ -65,17 +77,41 @@ export function ScrollableNumberField({
     onChange(next);
     setDraftValue(formatValue(next));
     return true;
-  }, [clampValue, formatValue, onChange]);
+  }, [clampValue, fmt, formatValue, onChange]);
 
   const stepBy = useCallback((direction: 1 | -1) => {
     if (disabled) return;
 
-    const parsed = Number(draftValue);
+    const parsed = fmt.parse(draftValue);
     const base = Number.isFinite(parsed) ? parsed : clampValue(value);
     const next = clampValue(base + (normalizeStep * direction));
     onChange(next);
     setDraftValue(formatValue(next));
-  }, [clampValue, disabled, draftValue, formatValue, normalizeStep, onChange, value]);
+  }, [clampValue, disabled, draftValue, fmt, formatValue, normalizeStep, onChange, value]);
+
+  // React attaches its `wheel` listener at the root as PASSIVE, so
+  // preventDefault() inside an onWheel handler is silently ignored and the wheel
+  // both steps the value AND scrolls whatever container the field sits in. A
+  // native non-passive listener is the only way to consume the event.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      if (disabled) return;
+      // Only step on wheel when the field is focused or Shift is held —
+      // prevents accidental value changes while scrolling the page. Shift also
+      // makes a mouse wheel arrive as horizontal scroll, hence the axis-agnostic
+      // direction.
+      if (document.activeElement !== el && !event.shiftKey) return;
+      const direction = wheelStepDirection(event);
+      if (direction === 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      stepBy(direction);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [disabled, stepBy]);
 
   const handleBlur = () => {
     isEditingRef.current = false;
@@ -88,7 +124,7 @@ export function ScrollableNumberField({
       return;
     }
 
-    const parsed = Number(draftValue);
+    const parsed = fmt.parse(draftValue);
     if (!Number.isFinite(parsed)) {
       setDraftValue(formatValue(clampValue(value)));
       return;
@@ -99,31 +135,38 @@ export function ScrollableNumberField({
     setDraftValue(formatValue(next));
   };
 
-  const parsedCurrent = Number(draftValue);
+  const parsedCurrent = fmt.parse(draftValue);
   const currentValue = Number.isFinite(parsedCurrent)
     ? clampValue(parsedCurrent)
     : clampValue(value);
+
+  const stepperClass = cn(
+    compact ? '!h-6 !w-6' : '!h-8 !w-8',
+    'shrink-0 !p-0 !bg-[var(--surface-0)] hover:!bg-[color-mix(in_srgb,var(--surface-0),white_4%)] disabled:!bg-[color-mix(in_srgb,var(--surface-1),black_8%)]',
+  );
+  const stepperIconClass = compact ? 'h-3 w-3' : 'h-3.5 w-3.5';
 
   const disableDecrement = disabled || currentValue <= min;
   const disableIncrement = disabled || currentValue >= max;
 
   return (
-    <div className={cn('flex min-w-0 items-center gap-1', className)}>
+    <div className={cn('flex min-w-0 items-center', compact ? 'gap-0.5' : 'gap-1', className)}>
       <IconButton
-        className="!h-8 !w-8 shrink-0 !p-0 !bg-[var(--surface-0)] hover:!bg-[color-mix(in_srgb,var(--surface-0),white_4%)] disabled:!bg-[color-mix(in_srgb,var(--surface-1),black_8%)]"
+        className={stepperClass}
         onClick={() => stepBy(-1)}
         disabled={disableDecrement}
         title={decreaseTitle}
       >
-        <Minus className="h-3.5 w-3.5" />
+        <Minus className={stepperIconClass} />
       </IconButton>
 
       <div className="relative w-0 min-w-0 flex-1">
         <input
-          type="number"
-          min={min}
-          max={max}
-          step={normalizeStep}
+          ref={inputRef}
+          // Text, not "number": a number input writes and reads the decimals of the system's
+          // locale, not the app's, and rejects a comma where the app shows one.
+          type="text"
+          inputMode="decimal"
           value={draftValue}
           disabled={disabled}
           onFocus={() => {
@@ -133,7 +176,7 @@ export function ScrollableNumberField({
             const nextRaw = event.target.value;
             setDraftValue(nextRaw);
             if (commitOnBlur) return;
-            const parsed = Number(nextRaw);
+            const parsed = fmt.parse(nextRaw);
             if (!Number.isFinite(parsed)) return;
             onChange(clampValue(parsed));
           }}
@@ -148,27 +191,33 @@ export function ScrollableNumberField({
               return;
             }
 
+            // What a number input did on its own.
+            if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+              event.preventDefault();
+              stepBy(event.key === 'ArrowUp' ? 1 : -1);
+              return;
+            }
+
             if (event.key === 'Escape') {
               event.preventDefault();
               setDraftValue(formatValue(clampValue(value)));
               event.currentTarget.blur();
             }
           }}
-          onWheel={(event) => {
-            if (disabled) return;
-            event.preventDefault();
-            stepBy(event.deltaY < 0 ? 1 : -1);
-          }}
           className={cn(
-            'ui-input h-8 w-full px-1.5 text-xs sm:text-sm text-center tabular-nums font-semibold no-spinners !bg-[var(--surface-0)]',
-            unit ? 'pr-8' : undefined,
+            'ui-input w-full text-center tabular-nums font-semibold no-spinners !bg-[var(--surface-0)]',
+            compact ? 'h-7 px-1 text-[11px]' : 'h-8 px-1.5 text-xs sm:text-sm',
+            unit ? (compact ? 'pr-4' : 'pr-8') : undefined,
             inputClassName,
           )}
           aria-label={ariaLabel}
         />
         {unit && (
           <span
-            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-medium"
+            className={cn(
+              'pointer-events-none absolute top-1/2 -translate-y-1/2 font-medium',
+              compact ? 'right-1 text-[8px]' : 'right-2 text-[10px]',
+            )}
             style={{ color: 'var(--text-muted)' }}
           >
             {unit}
@@ -177,12 +226,12 @@ export function ScrollableNumberField({
       </div>
 
       <IconButton
-        className="!h-8 !w-8 shrink-0 !p-0 !bg-[var(--surface-0)] hover:!bg-[color-mix(in_srgb,var(--surface-0),white_4%)] disabled:!bg-[color-mix(in_srgb,var(--surface-1),black_8%)]"
+        className={stepperClass}
         onClick={() => stepBy(1)}
         disabled={disableIncrement}
         title={increaseTitle}
       >
-        <Plus className="h-3.5 w-3.5" />
+        <Plus className={stepperIconClass} />
       </IconButton>
     </div>
   );

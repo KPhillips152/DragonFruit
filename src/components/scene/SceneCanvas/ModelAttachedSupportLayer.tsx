@@ -6,9 +6,10 @@ import { SupportProxyMeshLayer } from '@/supports/SupportProxyMeshLayer';
 import { RaftProxyMeshLayer } from '@/supports/RaftProxyMeshLayer';
 import RaftRenderer from '@/supports/Rafts/Crenelated/rendering/RaftRenderer';
 import LineRaftRenderer from '@/supports/Rafts/Crenelated/rendering/LineRaftRenderer';
-import type { SupportData } from '@/supports/rendering';
-import type { BracePreviewData } from '@/supports/SupportTypes/Brace/bracePlacementState';
-
+import { getSettings, subscribeToSettings } from '@/supports/Settings/state';
+import type { SupportPlacementPreviews } from '@/supports/rendering';
+import type { PlateFootprintSource } from '@/supports/Rafts/Crenelated/geometry/modelPlateFootprint';
+import { noteActivity } from '@/utils/debug/heartbeatContext';
 export type ModelAttachedSupportLayerProps = {
   mode?: SupportMode;
   modelFilterId?: string | null;
@@ -25,14 +26,24 @@ export type ModelAttachedSupportLayerProps = {
   selectedTintStrength?: number;
   activeModelId?: string | null;
   selectedModelIds?: string[];
+  marqueeCandidateModelIds?: readonly string[];
   hoverModelId?: string | null;
   modelDropOffsetsById?: Record<string, number>;
   navigationLodActive?: boolean;
   disableSelectionAndHover?: boolean;
+  /**
+   * Models standing on another bed. Their supports and raft are drawn dimmed and answer no
+   * pointer — the same rule the model itself follows — while the model's own layer is
+   * otherwise untouched (it is still drawn, and an active model is never scenery).
+   */
+  pointerSceneryModelIds?: ReadonlySet<string>;
   passive?: boolean;
   raftColorized?: boolean;
   raftHoverized?: boolean;
   onModelPointerSelect?: (modelId: string) => void;
+  /** In Select mode, a pointer-down on a support/raft reports a potential model
+   *  XY-drag start (model + screen coords). The scene owns the drag. */
+  onModelPointerDragStart?: (modelId: string, clientX: number, clientY: number) => void;
   ghostOpacity?: number;
   ghostRenderOrder?: number;
   supportRendererRef?: React.Ref<THREE.Group>;
@@ -42,11 +53,8 @@ export type ModelAttachedSupportLayerProps = {
   outOfBoundsMin?: THREE.Vector3 | null;
   outOfBoundsMax?: THREE.Vector3 | null;
   outOfBoundsStripeColor?: string;
-  trunkPlacementPreview?: SupportData | null;
-  branchPlacementPreview?: SupportData | null;
-  leafPlacementPreview?: SupportData | null;
-  bracePlacementPreview?: BracePreviewData | null;
-  kickstandPlacementPreview?: SupportData | null;
+  /** Live placement previews, keyed by type. Forwarded, never read here. */
+  placementPreviews?: SupportPlacementPreviews;
   /** When true, only show supports whose contact points touch the cavity mesh. */
   interiorView?: boolean;
   /** Cavity mesh geometry keyed by modelId, used for interior support filtering. */
@@ -57,6 +65,8 @@ export type ModelAttachedSupportLayerProps = {
    * for accurate BVH closest-point queries.
    */
   modelWorldInverseById?: Map<string, THREE.Matrix4>;
+  /** Models whose plate footprint every raft has to clear. */
+  plateClearanceTargets?: readonly PlateFootprintSource[];
 };
 
 export function ModelAttachedSupportLayer({
@@ -75,14 +85,17 @@ export function ModelAttachedSupportLayer({
   selectedTintStrength,
   activeModelId = null,
   selectedModelIds = [],
+  marqueeCandidateModelIds,
   hoverModelId = null,
   modelDropOffsetsById,
   navigationLodActive = false,
   disableSelectionAndHover = false,
+  pointerSceneryModelIds,
   passive = false,
   raftColorized = true,
   raftHoverized = false,
   onModelPointerSelect,
+  onModelPointerDragStart,
   ghostOpacity,
   ghostRenderOrder,
   supportRendererRef,
@@ -92,45 +105,64 @@ export function ModelAttachedSupportLayer({
   outOfBoundsMin,
   outOfBoundsMax,
   outOfBoundsStripeColor,
-  trunkPlacementPreview = null,
-  branchPlacementPreview = null,
-  leafPlacementPreview = null,
-  bracePlacementPreview = null,
-  kickstandPlacementPreview = null,
+  placementPreviews,
   interiorView = false,
   cavityGeometryByModelId,
   modelWorldInverseById,
+  plateClearanceTargets,
 }: ModelAttachedSupportLayerProps) {
+  noteActivity(mode === 'support' ? 'support-mode:layer' : 'prepare-mode:layer');
   // Performance policy: use proxy support/raft rendering everywhere except
   // support workspace, where full editable primitives are required.
   const useUltraLazySupports = mode !== 'support';
   const proxyPointerSelectionEnabled = mode === 'prepare' && !navigationLodActive && !disableSelectionAndHover && !passive;
   const proxyIncludeDetailedPrimitives = supportProxyIncludeDetailedPrimitives;
+  // Both flags answer one question, and a preset switch rewrites the whole
+  // settings object. The snapshot is the answer itself, so only a change to it
+  // re-renders this layer and the raft and support meshes under it.
+  const simpleRender = React.useSyncExternalStore(
+    subscribeToSettings,
+    () => {
+      const settings = getSettings();
+      return settings.debugSimpleSupportRender || settings.navigationDiscsOnly;
+    },
+    () => {
+      const settings = getSettings();
+      return settings.debugSimpleSupportRender || settings.navigationDiscsOnly;
+    },
+  );
+  // The navigation view (the Studio's eye button) is a line view too, so the
+  // raft goes with the shafts: it is the biggest solid thing on screen.
+  const hideRaftPrimitivesEffective = hideRaftPrimitives || simpleRender;
 
   return (
     <>
-      {!hideRaftPrimitives && !interiorView && useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && useUltraLazySupports && (
         <RaftProxyMeshLayer
           modelFilterId={hideRaftPrimitivesForInactiveModels && activeModelId ? activeModelId : modelFilterId}
           clipLower={clipLower}
           clipUpper={clipUpper}
           activeModelId={activeModelId}
           selectedModelIds={selectedModelIds}
+          marqueeCandidateModelIds={marqueeCandidateModelIds}
           hoverModelId={hoverModelId}
           excludeModelId={excludeModelId}
           excludeModelIds={excludeModelIds}
           ghostOpacity={ghostOpacity}
           ghostRenderOrder={ghostRenderOrder}
           onModelPointerSelect={onModelPointerSelect}
+          onModelPointerDragStart={onModelPointerDragStart}
           enablePointerSelection={proxyPointerSelectionEnabled}
           colorized={raftColorized}
           hoverized={raftHoverized}
           navigationLodActive={navigationLodActive}
           passive={passive}
+          pointerSceneryModelIds={pointerSceneryModelIds}
+          plateClearanceTargets={plateClearanceTargets}
         />
       )}
 
-      {!hideRaftPrimitives && !interiorView && !useUltraLazySupports && (
+      {!hideRaftPrimitivesEffective && !interiorView && !useUltraLazySupports && (
         <>
           <RaftRenderer
             clipLower={clipLower}
@@ -147,6 +179,8 @@ export function ModelAttachedSupportLayer({
             excludeModelIds={excludeModelIds}
             navigationLodActive={navigationLodActive}
             onModelPointerSelect={onModelPointerSelect}
+            pointerSceneryModelIds={pointerSceneryModelIds}
+            plateClearanceTargets={plateClearanceTargets}
           />
           <LineRaftRenderer
             clipLower={clipLower}
@@ -163,6 +197,8 @@ export function ModelAttachedSupportLayer({
             excludeModelIds={excludeModelIds}
             navigationLodActive={navigationLodActive}
             onModelPointerSelect={onModelPointerSelect}
+            pointerSceneryModelIds={pointerSceneryModelIds}
+            plateClearanceTargets={plateClearanceTargets}
           />
         </>
       )}
@@ -176,6 +212,7 @@ export function ModelAttachedSupportLayer({
             supportColorsByModelId={supportColorsByModelId}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             hoverTintColor={hoverTintColor}
             hoverTintStrength={hoverTintStrength}
@@ -189,7 +226,9 @@ export function ModelAttachedSupportLayer({
             outOfBoundsMax={outOfBoundsMax}
             outOfBoundsStripeColor={outOfBoundsStripeColor}
             onModelPointerSelect={onModelPointerSelect}
+            onModelPointerDragStart={onModelPointerDragStart}
             enablePointerSelection={proxyPointerSelectionEnabled}
+            pointerSceneryModelIds={pointerSceneryModelIds}
             includeDetailedPrimitives={proxyIncludeDetailedPrimitives}
             interiorView={interiorView}
             cavityGeometryByModelId={cavityGeometryByModelId}
@@ -209,20 +248,18 @@ export function ModelAttachedSupportLayer({
             selectedTintStrength={selectedTintStrength}
             activeModelId={activeModelId}
             selectedModelIds={selectedModelIds}
+            marqueeCandidateModelIds={marqueeCandidateModelIds}
             hoverModelId={hoverModelId}
             modelDropOffsetsById={modelDropOffsetsById}
             modelFilterId={modelFilterId}
             excludeModelId={excludeModelId}
             excludeModelIds={excludeModelIds}
             disableSelectionAndHover={disableSelectionAndHover}
+            pointerSceneryModelIds={pointerSceneryModelIds}
             ghostOpacity={ghostOpacity}
             ghostRenderOrder={ghostRenderOrder}
             passive={passive}
-            trunkPlacementPreview={trunkPlacementPreview}
-            branchPlacementPreview={branchPlacementPreview}
-            leafPlacementPreview={leafPlacementPreview}
-            bracePlacementPreview={bracePlacementPreview}
-            kickstandPlacementPreview={kickstandPlacementPreview}
+            placementPreviews={placementPreviews}
             interiorView={interiorView}
             cavityGeometryByModelId={cavityGeometryByModelId}
             modelWorldInverseById={modelWorldInverseById}
