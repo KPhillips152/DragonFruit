@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { buildKickstandData } from './kickstandBuilder';
+import { kickstandHasValidAngles } from './kickstandRules';
+import { getKickstandMaxAngleFromVerticalDeg } from './kickstandSettings';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
 import type { KickstandBuildResult, KickstandHostTarget } from './types';
 import type { SupportState, Trunk, Vec3, Segment, Roots } from '../../types';
@@ -67,6 +69,7 @@ export function generateRequiredKickstands(
     };
 
     const isGridEnabled = gridSettings.enabled && gridSettings.spacingMm > 0;
+    const maxAngleFromVerticalDeg = getKickstandMaxAngleFromVerticalDeg(isGridEnabled);
     const gridNodeKey = (modelId: string, gx: number, gy: number) => `${modelId}:${gx},${gy}`;
     const occupiedGridNodeKeys = new Set<string>();
     if (isGridEnabled) {
@@ -527,6 +530,9 @@ export function generateRequiredKickstands(
 
                     try {
                         const trialBuild = buildKickstandData(buildInput);
+                        if (!kickstandHasValidAngles(trialBuild, maxAngleFromVerticalDeg)) {
+                            continue;
+                        }
                         if (!builtKickstandPassesMeshClearance(trialBuild, trunk.modelId)) {
                             continue;
                         }

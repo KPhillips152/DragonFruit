@@ -7,12 +7,11 @@ import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '@/supports/history/actionTypes';
 import { addSupportEntity, addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { getGridSettings, getSettings } from '../../Settings/state';
-import { DEFAULT_SHAFT_MAX_ANGLE_DEG } from '../../Settings/defaults';
+import { getGridSettings } from '../../Settings/state';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
 import { clampKickstandHostT, kickstandHasValidAngles } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
-import { getKickstandPlacementOffsetMm } from './kickstandSettings';
+import { getKickstandMaxAngleFromVerticalDeg, getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
 import type { Vec3 } from '../../types';
 import { clearSupportSelection } from '../../interaction/shared/selection/selectionController';
@@ -653,7 +652,7 @@ export function KickstandPlacementController() {
                 return;
             }
 
-            const maxAngleFromVerticalDeg = getSettings().shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG;
+            const maxAngleFromVerticalDeg = getKickstandMaxAngleFromVerticalDeg();
             if (!kickstandHasValidAngles(finalBuild, maxAngleFromVerticalDeg)) {
                 kickstandPlacementStore.setPreview(finalTarget, finalBuild, toKickstandPreviewData(finalBuild));
                 return;

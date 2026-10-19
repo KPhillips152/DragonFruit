@@ -122,21 +122,34 @@ or an absolute Z difference, and includes authored-column builds:
 ```ts
 const valid = kickstandHasValidAngles(
   build,
-  settings.shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG,
+  getKickstandMaxAngleFromVerticalDeg(),
 );
 ```
 
-The angle is measured from vertical; the default 80° limit means at least 10°
-above horizontal. Coincident endpoints within 1e-6 mm have no angle to constrain,
-but noncoincident flat or descending shafts are invalid. Geometry is left intact
-for the preview rather than clamped or moved to make it pass.
+`getKickstandMaxAngleFromVerticalDeg` in
+`src/supports/SupportTypes/Kickstand/kickstandSettings.ts` reads the current profile.
+Without an active grid it uses `shaft.maxAngleDeg` (80° from vertical by default).
+With grid mode enabled and positive spacing it also applies the complementary
+angle `90 - grid.minBranchAngleDeg`; the grid setting is measured above horizontal,
+so the default 60° minimum means a 30° maximum from vertical. The stricter bound
+wins. Short kickstand members receive no exception to this minimum.
+
+Coincident endpoints within 1e-6 mm have no angle to constrain, but noncoincident
+flat or descending shafts are invalid. Geometry is left intact for the preview
+rather than clamped or moved to make it pass.
 
 `toKickstandPreviewData` marks invalid geometry with `SHAFT_ANGLE_TOO_FLAT`, using
-the existing message shared with shaft warnings. The controller preserves that
+a generic message shared with shaft warnings. The controller preserves that
 error, and the placement store publishes error changes even if the snap target
-has not moved. On click, validate the final build again using the current angle
-setting, after any occupied-node root relocation and before writing roots, knots,
-the kickstand, or history. Grid snapping must never bypass this check.
+has not moved. On click, re-evaluate the combined limit after any occupied-node
+root relocation and before writing roots, knots, the kickstand, or history.
+Grid snapping must never bypass this check.
+
+Automatic generation passes its explicit grid-enabled context to the same
+policy helper and rejects trial builds whose actual members violate it before
+accepting a kickstand. It must not generate shallow geometry that manual
+placement would reject.
+
 
 ## The placement guide line
 

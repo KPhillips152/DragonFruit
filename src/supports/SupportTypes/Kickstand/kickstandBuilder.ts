@@ -3,9 +3,8 @@ import type { SupportData } from '../../rendering/SupportBuilder';
 import { getJointDiameter } from '../../constants';
 import * as THREE from 'three';
 import { assertKickstandHostKind, clampKickstandHostT, kickstandHasValidAngles } from './kickstandRules';
-import { DEFAULT_SHAFT_MAX_ANGLE_DEG } from '../../Settings/defaults';
-import { getSettings } from '../../Settings/state';
 import {
+    getKickstandMaxAngleFromVerticalDeg,
     getKickstandKnotDiameterMm,
     getKickstandRootProfile,
     resolveKickstandLayout,
@@ -202,7 +201,7 @@ export function toKickstandPreviewData(build: KickstandBuildResult): SupportData
         roots: build.root,
         segments: previewSegments,
         knot: build.hostKnot,
-        error: kickstandHasValidAngles(build, getSettings().shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG)
+        error: kickstandHasValidAngles(build, getKickstandMaxAngleFromVerticalDeg())
             ? undefined
             : 'SHAFT_ANGLE_TOO_FLAT',
     };

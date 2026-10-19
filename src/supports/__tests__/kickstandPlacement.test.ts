@@ -262,14 +262,14 @@ test('Kickstand click-commit tests', async (t) => {
     assert.equal(kickstandSnapshot.kickstands['kickstand-test-id-2'], undefined, 'Expected kickstand NOT to be added');
   });
 
-  await t.test('falls back to finding nearest unoccupied grid cell when target cell is occupied', () => {
+  await t.test('rejects an occupied-root fallback whose rebuilt shafts violate the grid minimum angle', () => {
     resetStore();
     resetKickstandsInState();
     kickstandPlacementStore.reset();
 
     // Enable grid and set spacing to 2mm
     const { updateGridSettings } = require('../Settings/state');
-    updateGridSettings({ enabled: true, spacingMm: 2.0 });
+    updateGridSettings({ enabled: true, spacingMm: 2.0, minBranchAngleDeg: 60 });
 
     // Place an existing root at { x: 4, y: 4, z: 0 } which is close to proposed { x: 5, y: 5, z: 0 }
     // Both snap to { x: 4, y: 4, z: 0 } on a 2mm grid.
@@ -387,16 +387,18 @@ test('Kickstand click-commit tests', async (t) => {
     };
     window.dispatchEvent(clickEvent as any);
 
-    // Verify kickstand was added
     const kickstandSnapshot = readKickstands();
-    const kickstandIds = Object.keys(kickstandSnapshot.kickstands);
-    assert.equal(kickstandIds.length, 1, 'Expected exactly one kickstand to be added');
-    const addedKickstand = kickstandSnapshot.kickstands[kickstandIds[0]];
-    assert.ok(addedKickstand, 'Expected kickstand to be added');
+    assert.equal(Object.keys(kickstandSnapshot.kickstands).length, 0, 'No too-flat kickstand is committed');
+    assert.equal(Object.keys(getSnapshot().roots).length, 2, 'No extra root is committed');
+    assert.equal(Object.keys(getSnapshot().knots).length, 0, 'No extra host knot is committed');
 
-    // And verify its root position has shifted to the nearest unoccupied grid root (not at { x: 4, y: 4 })
-    const addedRoot = kickstandSnapshot.roots[addedKickstand.rootId];
-    assert.ok(addedRoot, 'Expected root to be added');
-    assert.ok(addedRoot.transform.pos.x !== 4 || addedRoot.transform.pos.y !== 4, 'Expected root to have moved away from (4,4)');
+    const rejected = kickstandPlacementStore.getSnapshot();
+    assert.equal(rejected.previewData?.error, 'SHAFT_ANGLE_TOO_FLAT');
+    assert.ok(rejected.previewBuild, 'The rebuilt geometry remains available as an invalid preview');
+    const { kickstandHasValidAngles } = require('../SupportTypes/Kickstand/kickstandRules');
+    assert.equal(kickstandHasValidAngles(rejected.previewBuild, 80), true,
+      'The loose shaft-only rule would have accepted this screenshot-like geometry');
+    assert.equal(kickstandHasValidAngles(rejected.previewBuild, 90 - 60), false,
+      'The actual members do not meet the configured 60-degree rise above horizontal');
   });
 });

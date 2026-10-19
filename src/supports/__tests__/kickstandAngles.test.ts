@@ -7,6 +7,7 @@ import { createDefaultSettings } from '../Settings/types';
 import { buildKickstandData, toKickstandPreviewData } from '../SupportTypes/Kickstand/kickstandBuilder';
 import { kickstandHasValidAngles } from '../SupportTypes/Kickstand/kickstandRules';
 import { kickstandPlacementStore } from '../SupportTypes/Kickstand/kickstandPlacementState';
+import { getKickstandMaxAngleFromVerticalDeg } from '../SupportTypes/Kickstand/kickstandSettings';
 import type { KickstandBuildInput, KickstandBuildResult } from '../SupportTypes/Kickstand/types';
 import type { Vec3 } from '../types';
 
@@ -34,7 +35,7 @@ function input(hostPos: Vec3, overrides: Partial<KickstandBuildInput> = {}): Kic
 }
 
 function assertValidity(build: KickstandBuildResult, expected: boolean): void {
-    const maxAngle = getSettings().shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG;
+    const maxAngle = getKickstandMaxAngleFromVerticalDeg();
     assert.equal(kickstandHasValidAngles(build, maxAngle), expected);
     assert.equal(toKickstandPreviewData(build).error, expected ? undefined : 'SHAFT_ANGLE_TOO_FLAT');
 }
@@ -59,15 +60,99 @@ test('grid-offset low hosts keep their geometry and are invalid with grid on or 
     }
 });
 
-test('sufficient host rise is allowed independently of grid-specific branch angle settings', () => {
-    for (const enabled of [false, true]) {
-        const settings = getSettings();
-        setSettings({ ...settings, grid: { ...settings.grid, enabled, minBranchAngleDeg: 85 } });
-        const build = buildKickstandData(input({ x: 0, y: 0, z: 20 }, {
-            rootPos: { x: settings.grid.spacingMm, y: 0, z: 0 },
+test('the grid minimum rejects an unchanged member allowed by the default shaft maximum', () => {
+    const build = buildKickstandData(input({ x: 4, y: 0, z: 8.5 }, {
+        authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
+    }));
+    const original = structuredClone(build);
+    assert.equal(kickstandHasValidAngles(build, DEFAULT_SHAFT_MAX_ANGLE_DEG), true);
+    assertValidity(build, true);
+
+    const settings = getSettings();
+    setSettings({ ...settings, grid: { ...settings.grid, enabled: true } });
+    assertValidity(build, false);
+    assert.deepEqual(build, original, 'the grid minimum must not relocate the root, host or joints');
+});
+
+test('a custom grid minimum accepts its exact boundary without short-member slack', () => {
+    for (const lateral of [4, 0.4]) {
+        const build = buildKickstandData(input({ x: lateral, y: 0, z: 4.5 + lateral }, {
+            authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
         }));
-        assertValidity(build, true);
+        for (const [minimum, expected] of [[45, true], [45.001, false], [44.999, true]] as const) {
+            const settings = getSettings();
+            setSettings({ ...settings, grid: { ...settings.grid, enabled: true, minBranchAngleDeg: minimum } });
+            assertValidity(build, expected);
+        }
     }
+});
+
+test('disabled and zero-spacing grids retain the shaft limit', () => {
+    const build = buildKickstandData(input({ x: 4, y: 0, z: 8.5 }, {
+        authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
+    }));
+    for (const [enabled, spacingMm, expected] of [
+        [true, 20, false],
+        [false, 20, true],
+        [true, 0, true],
+        [true, -1, true],
+    ] as const) {
+        const settings = getSettings();
+        setSettings({ ...settings, grid: { ...settings.grid, enabled, spacingMm } });
+        assertValidity(build, expected);
+    }
+});
+
+test('neither a weaker shaft maximum nor a weaker grid minimum can override the stricter limit', () => {
+    const build = buildKickstandData(input({ x: 4, y: 0, z: 8.5 }, {
+        authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
+    }));
+    for (const [shaftMaximum, gridMinimum, expected] of [
+        [45, 40, true],
+        [44.999, 40, false],
+        [44.999, 30, false],
+        [50, 45.001, false],
+        [80, 45.001, false],
+    ] as const) {
+        const settings = getSettings();
+        setSettings({
+            ...settings,
+            shaft: { ...settings.shaft, maxAngleDeg: shaftMaximum },
+            grid: { ...settings.grid, enabled: true, minBranchAngleDeg: gridMinimum },
+        });
+        assertValidity(build, expected);
+    }
+});
+
+test('an omitted grid minimum restores the default minimum instead of keeping a prior custom value', () => {
+    const build = buildKickstandData(input({ x: 4, y: 0, z: 8.5 }, {
+        authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
+    }));
+    const settings = getSettings();
+    setSettings({ ...settings, grid: { ...settings.grid, enabled: true, minBranchAngleDeg: 40 } });
+    assertValidity(build, true);
+
+    const legacySettings = structuredClone(getSettings());
+    Reflect.deleteProperty(legacySettings.grid, 'minBranchAngleDeg');
+    setSettings(legacySettings);
+    assertValidity(build, false);
+});
+
+test('explicit generation context applies the grid minimum independently of the global toggle', () => {
+    const build = buildKickstandData(input({ x: 4, y: 0, z: 8.5 }, {
+        authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
+    }));
+    const settings = getSettings();
+    setSettings({ ...settings, grid: { ...settings.grid, enabled: false, spacingMm: 0 } });
+    assert.equal(kickstandHasValidAngles(build, getKickstandMaxAngleFromVerticalDeg(true)), false);
+    setSettings({ ...settings, grid: { ...settings.grid, enabled: true } });
+    assert.equal(kickstandHasValidAngles(build, getKickstandMaxAngleFromVerticalDeg(false)), true);
+    setSettings({
+        ...settings,
+        shaft: { ...settings.shaft, maxAngleDeg: 40 },
+        grid: { ...settings.grid, enabled: true },
+    });
+    assert.equal(kickstandHasValidAngles(build, getKickstandMaxAngleFromVerticalDeg(false)), false);
 });
 
 test('moving the same root one grid spacing away can invalidate otherwise valid geometry', () => {
@@ -175,7 +260,7 @@ test('only coincident shafts within the geometry tolerance may ignore a flat or 
     }
 });
 
-test('a stationary snap target publishes valid-invalid-valid angle transitions', () => {
+test('a stationary snap target publishes valid-invalid-valid transitions from grid-only setting changes', () => {
     const request = input({ x: 4, y: 0, z: 8.5 }, {
         authoredColumn: { topPos: { x: 0, y: 0, z: 4.5 } },
     });
@@ -189,13 +274,13 @@ test('a stationary snap target publishes valid-invalid-valid angle transitions',
 
     kickstandPlacementStore.clearPreview();
     try {
-        for (const [limit, expectedError] of [
-            [50, undefined],
-            [40, 'SHAFT_ANGLE_TOO_FLAT'],
-            [50, undefined],
+        for (const [minimum, expectedError] of [
+            [40, undefined],
+            [50, 'SHAFT_ANGLE_TOO_FLAT'],
+            [40, undefined],
         ] as const) {
             const settings = getSettings();
-            setSettings({ ...settings, shaft: { ...settings.shaft, maxAngleDeg: limit } });
+            setSettings({ ...settings, grid: { ...settings.grid, enabled: true, minBranchAngleDeg: minimum } });
             kickstandPlacementStore.setPreview(target, build, toKickstandPreviewData(build));
             assert.equal(kickstandPlacementStore.getSnapshot().previewData!.error, expectedError);
         }

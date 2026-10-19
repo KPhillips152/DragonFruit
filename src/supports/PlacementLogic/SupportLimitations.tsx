@@ -8,7 +8,7 @@ import { LimitationCode, WarningCode } from '../types';
 
 export const SupportWarnings: Record<WarningCode, MessageDescriptor> = {
     ANGLE_VERTICAL_WARNING: msg`Horizontal angles are not good for holding up overhangs. They are only good for lateral stability.`,
-    SHAFT_ANGLE_TOO_FLAT: msg`Support angle is too flat (must be >10° from horizontal).`
+    SHAFT_ANGLE_TOO_FLAT: msg`Support shaft angle exceeds the configured limit.`
 };
 
 // Module level so React Compiler cannot rename anything the Lingui macro reads.

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { JOINT_DIAMETER_OFFSET_MM } from '../../constants';
+import { DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG, DEFAULT_SHAFT_MAX_ANGLE_DEG } from '../../Settings/defaults';
 import { getSettings } from '../../Settings/state';
 import type { KickstandPlacementLayout } from './types';
 
@@ -56,6 +57,15 @@ export function resolveKickstandLayout(
         minJointSpacingMm,
         minTerminalClearanceMm,
     };
+}
+
+export function getKickstandMaxAngleFromVerticalDeg(gridEnabled?: boolean): number {
+    const settings = getSettings();
+    const maxShaftAngle = settings.shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG;
+    const gridActive = gridEnabled ?? (settings.grid.enabled && settings.grid.spacingMm > 0);
+    return gridActive
+        ? Math.min(maxShaftAngle, 90 - (settings.grid.minBranchAngleDeg ?? DEFAULT_GRID_MIN_BRANCH_ANGLE_DEG))
+        : maxShaftAngle;
 }
 
 export function getKickstandBodyDiameterMm(): number {
