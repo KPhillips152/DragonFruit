@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Trans } from '@lingui/react/macro';
 import { MouseTooltip } from '@/components/ui/MouseTooltip';
-import { usePlatformModifier } from '@/hooks/usePlatformModifier';
 
-/** Cursor-following tooltip shown on rotation ring hover with snap shortcut hints. */
+/** Cursor-following tooltip shown on rotation ring hover, describing the dial. */
 export function RotationHintTooltip() {
   const [visible, setVisible] = useState(false);
-  const modKey = usePlatformModifier();
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -26,9 +25,9 @@ export function RotationHintTooltip() {
           whiteSpace: 'nowrap',
         }}
       >
-        <div>Drag to rotate</div>
+        <div><Trans>Drag to rotate</Trans></div>
         <div className="mt-0.5 opacity-70">
-          {modKey}+Drag: 45° &nbsp;|&nbsp; +Shift: 15°
+          <Trans>Dial marks pull at 5° / 10° / 45°</Trans>
         </div>
       </div>
     </MouseTooltip>

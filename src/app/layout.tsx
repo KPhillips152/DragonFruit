@@ -3,9 +3,12 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { HotkeyProvider } from "@/hotkeys/HotkeyContext";
 import { HotkeyRegistryManager } from "@/hotkeys/HotkeyRegistryManager";
+import { ExperimentsNativeSync } from "@/features/experiments/ExperimentsNativeSync";
 import { RendererCrashDiagnostics } from "@/components/debug/RendererCrashDiagnostics";
+import { DevIndicatorPosition } from "@/components/debug/DevIndicatorPosition";
 import { AppLogger } from "@/components/AppLogger";
 import { I18nClientProvider } from "@/components/I18nClientProvider";
+import { ScrollLockedInputs } from "@/components/ui/ScrollLockedInputs";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -17,10 +20,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// i18n-ignore-start: static HTML metadata, rendered before any locale is known; product and org names
 export const metadata: Metadata = {
   title: "DragonFruit",
   description: "DragonFruit by Open Resin Alliance",
 };
+// i18n-ignore-end
 
 export default function RootLayout({
   children,
@@ -47,8 +52,11 @@ export default function RootLayout({
         <I18nClientProvider>
           <HotkeyProvider>
             <HotkeyRegistryManager />
+            <ExperimentsNativeSync />
             <AppLogger />
             <RendererCrashDiagnostics />
+            <DevIndicatorPosition />
+            <ScrollLockedInputs />
             {children}
           </HotkeyProvider>
         </I18nClientProvider>

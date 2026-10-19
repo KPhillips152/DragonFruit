@@ -1,41 +1,32 @@
 'use client';
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import { Trans } from '@lingui/react/macro';
+import { useEscapeToClose } from '@/hotkeys/useEscapeToClose';
 import { createPortal } from 'react-dom';
-import { ExternalLink, Loader2 } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
+import { ProgressBar, Spinner } from '@/components/atoms';
 
 type UvToolsLaunchingModalProps = {
   isOpen: boolean;
   filePath: string | null;
-  /** Called after UVTools launch completes (success or failure). */
-  onLaunchComplete: () => void;
 };
 
 /**
  * A non-dismissible modal shown while UVTools is being launched with the
  * sliced file. Displays an indeterminate progress bar and the target file path.
- * Cannot be closed via Escape, backdrop click, or any other interaction —
- * it auto-dismisses once UVTools reports completion via `onLaunchComplete`.
+ * Cannot be closed via Escape, backdrop click, or any other interaction — the
+ * caller dismisses it by clearing the launching path.
  */
 export function UvToolsLaunchingModal({
   isOpen,
   filePath,
-  onLaunchComplete,
 }: UvToolsLaunchingModalProps) {
-  // Trap focus inside the modal while open (prevent accidental Escape)
-  React.useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (event: CustomEvent) => {
-      if (event.detail.key === 'Escape') {
-        event.stopImmediatePropagation();
-      }
-    };
-
-    // Use capture phase to intercept Escape before anything else
-    window.addEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
-    return () => window.removeEventListener('app-hotkey-keydown', handleKeyDown as EventListener, { capture: true });
-  }, [isOpen]);
+  // Registering without a close handler swallows Escape instead of dismissing.
+  const { _ } = useLingui();
+  useEscapeToClose(isOpen, undefined);
 
   if (!isOpen || typeof document === 'undefined') return null;
 
@@ -44,7 +35,7 @@ export function UvToolsLaunchingModal({
       className="fixed inset-0 z-[150] flex items-center justify-center bg-black/55 backdrop-blur-sm px-3"
       role="dialog"
       aria-modal="true"
-      aria-label="Opening in UVTools"
+      aria-label={_(msg`Opening in UVTools`)}
       onPointerDown={(e) => e.stopPropagation()}
     >
       <div
@@ -68,28 +59,20 @@ export function UvToolsLaunchingModal({
           </span>
           <div>
             <div className="text-xs uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>
-              External Tool
+              <Trans>External Tool</Trans>
             </div>
             <h2 className="text-base font-semibold" style={{ color: 'var(--text-strong)' }}>
-              Opening in UVTools
+              <Trans>Opening in UVTools</Trans>
             </h2>
           </div>
         </div>
 
         <div className="p-4 space-y-3">
           {/* Smooth indeterminate progress bar (same as upload dialog) */}
-          <div
-            className="ui-loading-track h-2 w-full rounded-full"
-            style={{ background: 'color-mix(in srgb, var(--surface-2), black 20%)' }}
-          >
-            <div
-              className="ui-loading-indicator"
-              style={{ background: 'var(--accent)' }}
-            />
-          </div>
+          <ProgressBar size="sm" indeterminate />
 
           <p className="text-xs text-center" style={{ color: 'var(--text-muted)' }}>
-            Launching UVTools to inspect the sliced file&hellip;
+            <Trans>Launching UVTools to inspect the sliced file…</Trans>
           </p>
 
           {filePath && (
@@ -98,7 +81,7 @@ export function UvToolsLaunchingModal({
               style={{ borderColor: 'var(--border-subtle)', background: 'var(--surface-1)' }}
             >
               <div className="text-[11px] uppercase tracking-wide mb-1" style={{ color: 'var(--text-muted)' }}>
-                File
+                <Trans>File</Trans>
               </div>
               <div
                 className="text-xs font-mono break-all"
@@ -111,8 +94,8 @@ export function UvToolsLaunchingModal({
           )}
 
           <div className="flex items-center justify-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            <span>Please wait&hellip;</span>
+            <Spinner size="sm" />
+            <span><Trans>Please wait…</Trans></span>
           </div>
         </div>
       </div>

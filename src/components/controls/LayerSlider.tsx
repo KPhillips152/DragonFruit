@@ -1,6 +1,32 @@
 ﻿"use client";
 
 import React from 'react';
+import { useLingui } from '@lingui/react';
+import { msg } from '@lingui/core/macro';
+import type { MessageDescriptor } from '@lingui/core';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { useOutsideDismiss } from '@/hooks/useOutsideDismiss';
+import { clampToViewport } from '@/utils/math';
+import { useLocaleFormat } from '@/hooks/useLocaleFormat';
+
+/** min-width 136px + 10px offset + margin. */
+const THUMB_EDIT_POPOVER_WIDTH = 156;
+
+type Translate = (descriptor: MessageDescriptor) => string;
+
+/**
+ * Tooltip on the minimal rail. Module-level so React Compiler cannot rename the interpolated
+ * locals and desync the message ids (see AGENTS.md).
+ */
+function formatMinimalRailTitle(translate: Translate, layer: number, height: string, crossSection: 'none' | 'on' | 'off'): string {
+  if (crossSection === 'on') {
+    return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value • Double-click to turn the cross-section off`);
+  }
+  if (crossSection === 'off') {
+    return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value • Double-click to turn the cross-section back on`);
+  }
+  return translate(msg`Layer ${layer} • ${height} • Right-click a handle to type an exact value`);
+}
 
 type LayerSliderProps = {
   min: number;
@@ -10,12 +36,10 @@ type LayerSliderProps = {
   onChange: (next: number) => void;
   onScrubStart?: () => void;
   onScrubEnd?: () => void;
-  onCrossSectionModeChange?: (mode: 'smooth' | 'rasterized') => void;
   currentHeightMm?: number;
   maxHeightMm?: number;
   className?: string;
   showValue?: boolean;
-  crossSectionMode?: 'smooth' | 'rasterized';
   docked?: boolean;
   embedded?: boolean;
   expandToContainer?: boolean;
@@ -23,7 +47,6 @@ type LayerSliderProps = {
   lowerValue?: number;
   onLowerChange?: (next: number) => void;
   lowerCurrentHeightMm?: number;
-  showModeIndicator?: boolean;
   crossSectionEnabled?: boolean;
   onToggleCrossSection?: () => void;
   layerHeightMm?: number;
@@ -31,7 +54,9 @@ type LayerSliderProps = {
   allowTrackClickJump?: boolean;
 };
 
-export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, onCrossSectionModeChange, currentHeightMm, maxHeightMm, className, showValue = false, crossSectionMode = 'smooth', docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, showModeIndicator = true, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
+export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onScrubEnd, currentHeightMm, maxHeightMm, className, showValue = false, docked = false, embedded = false, expandToContainer = false, dragBatchMode = 'raf', lowerValue, onLowerChange, lowerCurrentHeightMm, crossSectionEnabled = true, onToggleCrossSection, layerHeightMm, compactMinimalRail = false, allowTrackClickJump = false }: LayerSliderProps) {
+  const { _ } = useLingui();
+  const fmt = useLocaleFormat();
   const isMinimalRail = embedded && docked;
   const isCompactMinimalRail = isMinimalRail && compactMinimalRail;
   const containerRef = React.useRef<HTMLDivElement | null>(null);
@@ -50,6 +75,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   // Thumb click-to-edit state
   const [editingThumb, setEditingThumb] = React.useState<'upper' | 'lower' | null>(null);
+  const [editPopoverSide, setEditPopoverSide] = React.useState<'left' | 'right'>('left');
   const [editMode, setEditMode] = React.useState<'layer' | 'mm'>('layer');
   const [editRawValue, setEditRawValue] = React.useState('');
   const editInputRef = React.useRef<HTMLInputElement>(null);
@@ -57,9 +83,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   const openThumbEditRef = React.useRef<((thumb: 'upper' | 'lower') => void) | null>(null);
 
   const formatMm = React.useCallback((mm: number) => {
-    if (!Number.isFinite(mm)) return '0';
-    return mm.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1');
-  }, []);
+    if (!Number.isFinite(mm)) return fmt.unit('mm', '0');
+    return fmt.unit('mm', fmt.number(mm, { maximumFractionDigits: 2 }));
+  }, [fmt]);
 
   // Update input value when slider value changes externally
   React.useEffect(() => {
@@ -200,6 +226,16 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const openThumbEdit = React.useCallback((thumb: 'upper' | 'lower') => {
     const currentLayer = thumb === 'upper' ? valueRef.current : lowerValueRef.current;
+    // Open the popover towards whichever side of the rail actually has room —
+    // sliders docked at the right screen edge would otherwise clip it off-screen.
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const { overflowRight } = clampToViewport(
+        { x: rect.right + 10, y: rect.top },
+        { width: THUMB_EDIT_POPOVER_WIDTH, height: 0 },
+      );
+      setEditPopoverSide(overflowRight ? 'left' : 'right');
+    }
     setEditMode('layer');
     setEditRawValue(String(Math.round(currentLayer)));
     setEditingThumb(thumb);
@@ -211,7 +247,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
   const commitThumbEdit = React.useCallback(() => {
     if (!editingThumb) return;
-    const parsed = parseFloat(editRawValue);
+    const parsed = fmt.parse(editRawValue);
     if (!isNaN(parsed) && parsed >= 0) {
       const lhMm = layerHeightMm ?? 0;
       const targetLayer = (editMode === 'mm' && lhMm > 0)
@@ -221,21 +257,21 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       else emitLowerChange(targetLayer);
     }
     setEditingThumb(null);
-  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange]);
+  }, [editingThumb, editRawValue, editMode, layerHeightMm, emitChange, emitLowerChange, fmt]);
 
   const switchEditMode = React.useCallback((newMode: 'layer' | 'mm') => {
     if (newMode === editMode || !layerHeightMm || layerHeightMm <= 0) return;
-    const current = parseFloat(editRawValue);
+    const current = fmt.parse(editRawValue);
     if (!isNaN(current) && current >= 0) {
       if (newMode === 'mm') {
-        setEditRawValue((current * layerHeightMm).toFixed(3).replace(/\.?0+$/, ''));
+        setEditRawValue(fmt.field(current * layerHeightMm, 3));
       } else {
         setEditRawValue(String(Math.round(current / layerHeightMm)));
       }
     }
     setEditMode(newMode);
     requestAnimationFrame(() => { editInputRef.current?.select(); });
-  }, [editMode, editRawValue, layerHeightMm]);
+  }, [editMode, editRawValue, layerHeightMm, fmt]);
 
   // Auto-focus the input when a thumb edit popover opens
   React.useEffect(() => {
@@ -248,16 +284,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
   }, [editingThumb]);
 
   // Dismiss + commit when clicking outside the popover
-  React.useEffect(() => {
-    if (!editingThumb) return;
-    const handleOutsideClick = (e: MouseEvent) => {
-      if (editPopoverRef.current && !editPopoverRef.current.contains(e.target as Node)) {
-        commitThumbEdit();
-      }
-    };
-    document.addEventListener('mousedown', handleOutsideClick);
-    return () => document.removeEventListener('mousedown', handleOutsideClick);
-  }, [editingThumb, commitThumbEdit]);
+  useOutsideDismiss(editingThumb !== null, commitThumbEdit, { ignoreRef: editPopoverRef });
   const onPointerDown = React.useCallback((e: React.MouseEvent) => {
     // Right-click: open the thumb popover if near a thumb, then let onContextMenu handle the rest
     if (e.button === 2) {
@@ -565,6 +592,17 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     }
   }, []);
 
+  // Only a jump glides. A wheel or arrow step lands where it is: eased, every step of a
+  // scroll restarts the glide, and the thumb trails the layer the viewport already shows.
+  const [glide, setGlide] = React.useState({ value, lowerValue, eased: false });
+  if (glide.value !== value || glide.lowerValue !== lowerValue) {
+    const near = 2 * (step || 1);
+    const eased = Math.abs(value - glide.value) > near
+      || Math.abs((lowerValue ?? 0) - (glide.lowerValue ?? 0)) > near;
+    setGlide({ value, lowerValue, eased });
+  }
+  const easesPosition = glide.eased && !isDraggingThumb;
+
   const thumbColor = crossSectionEnabled ? 'var(--accent)' : 'var(--text-muted)';
   const percent = Math.min(100, Math.max(0, ((value - min) / Math.max(1, (max - min))) * 100));
   const lowerPercent = lowerValue != null
@@ -590,19 +628,18 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
     ? 'inline-flex items-center rounded-md border px-0.5 py-0 text-[8px] font-semibold tabular-nums'
     : railBadgeClass;
   const shouldPlaceCurrentBadgeBelowThumb = isMinimalRail && percent >= 96;
-  const thumbEditPopoverClassName = isCompactMinimalRail
+  const thumbEditPopoverClassName = editPopoverSide === 'right'
     ? 'absolute left-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2'
     : 'absolute right-full top-1/2 -translate-y-1/2 z-[200] flex flex-col gap-1.5 rounded-lg border p-2';
-  const thumbEditPopoverOffsetStyle: React.CSSProperties = isCompactMinimalRail
+  const thumbEditPopoverOffsetStyle: React.CSSProperties = editPopoverSide === 'right'
     ? { marginLeft: '10px' }
     : { marginRight: '10px' };
   const minimalRailTitle = React.useMemo(() => {
-    const mmLabel = typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö';
-    const rightClickAction = onCrossSectionModeChange
-      ? `Right-click to toggle ${crossSectionMode === 'smooth' ? 'rasterized' : 'smooth'}`
-      : 'Right-click thumb to edit';
-    return `Layer ${value} ΓÇó ${mmLabel} ΓÇó ${rightClickAction}`;
-  }, [crossSectionMode, currentHeightMm, formatMm, onCrossSectionModeChange, value]);
+    const mmLabel = typeof currentHeightMm === 'number' ? formatMm(currentHeightMm) : '—';
+    const crossSection = onToggleCrossSection ? (crossSectionEnabled ? 'on' : 'off') : 'none';
+    return formatMinimalRailTitle(_, value, mmLabel, crossSection);
+  }, [_, crossSectionEnabled, currentHeightMm, formatMm, onToggleCrossSection, value]);
+  const railClassName = `relative mx-auto ${embedded ? (expandToContainer ? 'flex-1 h-full min-h-[300px]' : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`;
 
   return (
     <div
@@ -616,7 +653,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
       <div
         className={embedded
           ? isCompactMinimalRail
-            ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} mx-auto w-[34px] py-1`
+            ? `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} mx-auto w-[34px] pt-1 pb-0`
             : `${expandToContainer ? 'h-full min-h-0 flex flex-col' : ''} w-full rounded-lg ${isMinimalRail ? 'px-0 py-1.5' : 'px-1 py-1'}`
           : 'ui-panel w-44 rounded-lg px-2.5 py-2.5 shadow-lg'}
         style={embedded
@@ -631,7 +668,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           <div className={embedded ? 'mb-1.5' : 'mb-2'}>
             <div className="flex items-center justify-between">
               <div className={`${embedded ? 'text-[10px]' : 'text-[11px]'} font-semibold uppercase tracking-wide`} style={{ color: 'var(--text-muted)' }}>
-                Layer
+                {_(msg`Layer`)}
               </div>
               <div className="text-xs font-semibold tabular-nums" style={{ color: 'var(--text-strong)' }}>
                 {value}
@@ -645,11 +682,11 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 background: 'color-mix(in srgb, var(--surface-1), transparent 12%)',
               }}
             >
-              {typeof currentHeightMm === 'number' ? `${formatMm(currentHeightMm)} mm` : 'ΓÇö'}
+              {typeof currentHeightMm === 'number' ? formatMm(currentHeightMm) : '—'}
             </div>
             {typeof maxHeightMm === 'number' && !embedded && (
               <div className="text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
-                Max {formatMm(maxHeightMm)} mm
+                Max {formatMm(maxHeightMm)}
               </div>
             )}
           </div>
@@ -663,9 +700,13 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           </div>
         )}
 
+        <Tooltip
+          content={isMinimalRail ? <span className="whitespace-pre-line">{minimalRailTitle}</span> : undefined}
+          wrapperClassName={railClassName}
+        >
         <div
           data-no-drag="true"
-          className={`relative mx-auto ${embedded ? (expandToContainer ? (isMinimalRail ? 'flex-1 h-full min-h-[300px]' : 'flex-1 h-full min-h-[300px]') : 'h-[46vh]') : 'h-[56vh]'} ${embedded ? (isMinimalRail ? (isCompactMinimalRail ? 'w-4' : 'w-5') : 'w-7') : 'w-10'} cursor-pointer`}
+          className={railClassName}
           onMouseDown={onPointerDown}
           onDoubleClick={(e) => {
             if (!onToggleCrossSection) return;
@@ -676,14 +717,9 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
           onContextMenu={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            if (!onCrossSectionModeChange) return;
-            onCrossSectionModeChange(crossSectionMode === 'smooth' ? 'rasterized' : 'smooth');
           }}
           tabIndex={0}
           onKeyDown={onKeyDown}
-          title={isMinimalRail
-            ? minimalRailTitle
-            : undefined}
         >
           {!isMinimalRail && (
             <div
@@ -713,10 +749,14 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
 
             {/* Progress fill */}
             <div
-              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full transition-[background,box-shadow] duration-200"
+              className="absolute left-1/2 -translate-x-1/2 w-1.5 rounded-full"
               style={{
                 bottom: `${lowerPercent ?? 0}%`,
                 height: `${percent - (lowerPercent ?? 0)}%`,
+                // Glides with the thumbs, or it reaches a jump's end while they are still on the way.
+                transition: easesPosition
+                  ? 'bottom 170ms cubic-bezier(0.22, 1, 0.36, 1), height 170ms cubic-bezier(0.22, 1, 0.36, 1), background 200ms, box-shadow 200ms'
+                  : 'background 200ms, box-shadow 200ms',
                 background: crossSectionEnabled
                   ? 'linear-gradient(180deg, color-mix(in srgb, var(--accent), white 14%), var(--accent))'
                   : 'linear-gradient(180deg, color-mix(in srgb, var(--text-muted), white 10%), var(--text-muted))',
@@ -733,7 +773,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                 className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
                 style={{
                   top: `${100 - lowerPercent}%`,
-                  transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                  transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
                 }}
               >
                 <div className="relative">
@@ -750,34 +790,20 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                             color: 'var(--text-strong)',
                           }}
                     >
-                      {isMinimalRail ? `${lowerValue}` : `${formatMm(lowerCurrentHeightMm)} mm`}
+                      {isMinimalRail ? `${lowerValue}` : formatMm(lowerCurrentHeightMm)}
                     </div>
                   )}
-                  {crossSectionMode === 'rasterized' ? (
-                    <div
-                      className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
-                      style={{
-                        borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
-                        background: `repeating-linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 8%) 0 4px, color-mix(in srgb, ${thumbColor}, black 8%) 4px 8px)`,
-                        boxShadow: isDraggingThumb
-                          ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                          : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
-                        opacity: 0.75,
-                      }}
-                    />
-                  ) : (
-                    <div
-                      className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
-                      style={{
-                        borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
-                        background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                        boxShadow: isDraggingThumb
-                          ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                          : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
-                        opacity: 0.75,
-                      }}
-                    />
-                  )}
+                  <div
+                    className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+                    style={{
+                      borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                      background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
+                      boxShadow: isDraggingThumb
+                        ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                        : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
+                      opacity: 0.75,
+                    }}
+                  />
                   {/* Lower thumb edit popover */}
                   {editingThumb === 'lower' && (
                     <div
@@ -802,7 +828,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                               : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
                             onMouseDown={e => e.preventDefault()}
                             onClick={() => switchEditMode('layer')}
-                          >Layer #</button>
+                          >{_(msg`Layer #`)}</button>
                           <button
                             className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
                             style={editMode === 'mm'
@@ -831,7 +857,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                           background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
                           color: 'var(--text-strong)',
                         }}
-                        placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                        placeholder={editMode === 'layer' ? _(msg`Layer #`) : _(msg`Height mm`)}
                       />
                     </div>
                   )}
@@ -844,7 +870,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
               className="absolute left-1/2 -translate-x-1/2 -translate-y-1/2"
               style={{
                 top: `${100 - percent}%`,
-                transition: isDraggingThumb ? 'none' : 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)',
+                transition: easesPosition ? 'top 170ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none',
               }}
             >
               <div className="relative">
@@ -863,33 +889,20 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                   >
                     {isMinimalRail
                       ? `${value}`
-                      : `${formatMm(currentHeightMm)} mm`}
+                      : formatMm(currentHeightMm)}
                   </div>
                 )}
-            {crossSectionMode === 'rasterized' ? (
-              <div
-                className={`h-[9px] w-[24px] rounded-[3px] border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
-                style={{
-                  borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
-                  background: `repeating-linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 8%) 0 4px, color-mix(in srgb, ${thumbColor}, black 8%) 4px 8px)`,
-                  boxShadow: isDraggingThumb
-                    ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                    : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
-                }}
-              />
-            ) : (
-              <div
-                className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
-                style={{
-                  borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
-                  background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
-                  boxShadow: isDraggingThumb
-                    ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
-                    : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
-                }}
-              />
-            )}
-            
+            <div
+              className={`h-[9px] w-[24px] rounded-full border ${isDraggingThumb ? 'scale-105' : 'scale-100'} transition-[transform,background,box-shadow] duration-150`}
+              style={{
+                borderColor: `color-mix(in srgb, white, ${thumbColor} 20%)`,
+                background: `linear-gradient(90deg, color-mix(in srgb, ${thumbColor}, white 20%), ${thumbColor}, color-mix(in srgb, ${thumbColor}, white 20%))`,
+                boxShadow: isDraggingThumb
+                  ? `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 65%), 0 6px 14px rgba(0,0,0,0.38)`
+                  : `0 0 0 2px color-mix(in srgb, ${thumbColor}, transparent 80%), 0 4px 10px rgba(0,0,0,0.35)`,
+              }}
+            />
+
             {/* Upper thumb edit popover */}
             {editingThumb === 'upper' && (
               <div
@@ -914,7 +927,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                         : { background: 'color-mix(in srgb, var(--surface-2), transparent 20%)', color: 'var(--text-muted)' }}
                       onMouseDown={e => e.preventDefault()}
                       onClick={() => switchEditMode('layer')}
-                    >Layer #</button>
+                    >{_(msg`Layer #`)}</button>
                     <button
                       className="flex-1 rounded px-1.5 py-0.5 text-[10px] font-medium transition-colors"
                       style={editMode === 'mm'
@@ -943,7 +956,7 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
                     background: 'color-mix(in srgb, var(--surface-1), transparent 10%)',
                     color: 'var(--text-strong)',
                   }}
-                  placeholder={editMode === 'layer' ? 'Layer #' : 'Height mm'}
+                  placeholder={editMode === 'layer' ? _(msg`Layer #`) : _(msg`Height mm`)}
                 />
               </div>
             )}
@@ -951,82 +964,49 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             {/* Shift indicator - wifi-style precision arcs centered on thumb */}
             {isShiftHeld && (
               <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-                {crossSectionMode === 'rasterized' ? (
-                  // Pixelated arcs for raster mode - 7px gap, cleaner circular shape
-                  <svg width="72" height="72" viewBox="0 0 72 72" className="drop-shadow-lg">
-                    {/* Outer arc - radius ~24px with 7px gap (14 + 7 + ~3) */}
-                    <rect x="12" y="22" width="2" height="2" fill="#3b82f6" />
-                    <rect x="10" y="24" width="2" height="2" fill="#3b82f6" />
-                    <rect x="8" y="26" width="2" height="2" fill="#3b82f6" />
-                    <rect x="6" y="28" width="2" height="2" fill="#3b82f6" />
-                    <rect x="4" y="30" width="2" height="2" fill="#3b82f6" />
-                    <rect x="4" y="32" width="2" height="2" fill="#3b82f6" />
-                    <rect x="2" y="34" width="2" height="2" fill="#3b82f6" />
-                    <rect x="2" y="36" width="2" height="2" fill="#3b82f6" />
-                    <rect x="4" y="38" width="2" height="2" fill="#3b82f6" />
-                    <rect x="4" y="40" width="2" height="2" fill="#3b82f6" />
-                    <rect x="6" y="42" width="2" height="2" fill="#3b82f6" />
-                    <rect x="8" y="44" width="2" height="2" fill="#3b82f6" />
-                    <rect x="10" y="46" width="2" height="2" fill="#3b82f6" />
-                    <rect x="12" y="48" width="2" height="2" fill="#3b82f6" />
-                    
-                    {/* Inner arc - radius ~17px with 7px gap (14 + 7 - 4) */}
-                    <rect x="18" y="26" width="2" height="2" fill="#3b82f6" />
-                    <rect x="16" y="28" width="2" height="2" fill="#3b82f6" />
-                    <rect x="14" y="30" width="2" height="2" fill="#3b82f6" />
-                    <rect x="14" y="32" width="2" height="2" fill="#3b82f6" />
-                    <rect x="12" y="34" width="2" height="2" fill="#3b82f6" />
-                    <rect x="12" y="36" width="2" height="2" fill="#3b82f6" />
-                    <rect x="14" y="38" width="2" height="2" fill="#3b82f6" />
-                    <rect x="14" y="40" width="2" height="2" fill="#3b82f6" />
-                    <rect x="16" y="42" width="2" height="2" fill="#3b82f6" />
-                    <rect x="18" y="44" width="2" height="2" fill="#3b82f6" />
-                  </svg>
-                ) : (
-                  // Smooth arcs for normal mode - 7px gap, shorter arcs
-                  <svg width="52" height="52" viewBox="0 0 52 52" className="drop-shadow-lg">
-                    {/* Outer arc - radius 24px with 7px gap (10 + 7 + 7 spacing) */}
-                    <path
-                      d="M 9.5 14.5 A 24 24 0 0 0 2 26"
-                      fill="none"
-                      stroke="#3b82f6"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M 9.5 37.5 A 24 24 0 0 1 2 26"
-                      fill="none"
-                      stroke="#3b82f6"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    />
-                    
-                    {/* Inner arc - radius 17px with 7px gap (10 + 7) */}
-                    <path
-                      d="M 14.0 17.0 A 17 17 0 0 0 9 26"
-                      fill="none"
-                      stroke="#3b82f6"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    />
-                    <path
-                      d="M 14.0 35.0 A 17 17 0 0 1 9 26"
-                      fill="none"
-                      stroke="#3b82f6"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                )}
+                <svg width="52" height="52" viewBox="0 0 52 52" className="drop-shadow-lg">
+                  {/* Outer arc - radius 24px with 7px gap (10 + 7 + 7 spacing) */}
+                  <path
+                    d="M 9.5 14.5 A 24 24 0 0 0 2 26"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M 9.5 37.5 A 24 24 0 0 1 2 26"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+
+                  {/* Inner arc - radius 17px with 7px gap (10 + 7) */}
+                  <path
+                    d="M 14.0 17.0 A 17 17 0 0 0 9 26"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                  <path
+                    d="M 14.0 35.0 A 17 17 0 0 1 9 26"
+                    fill="none"
+                    stroke="#3b82f6"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
               </div>
             )}
               </div>
             </div>
           </div>
         </div>
+        </Tooltip>
 
         {!isMinimalRail && (
-          <div className="mt-1 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
+          <div className="mt-0 text-center text-[10px] tabular-nums" style={{ color: 'var(--text-muted)' }}>
             {min}
           </div>
         )}
@@ -1039,15 +1019,6 @@ export function LayerSlider({ min, max, step, value, onChange, onScrubStart, onS
             >
               {min}
             </div>
-            {showModeIndicator && (
-              <div
-                className={minimalRailBadgeClass}
-                style={railBadgeStyle}
-                title={`Current cross-section mode: ${crossSectionMode}. Right-click slider to toggle.`}
-              >
-                {crossSectionMode === 'smooth' ? 'S' : 'R'}
-              </div>
-            )}
           </div>
         )}
 
