@@ -68,7 +68,7 @@ export const kickstandPlacementStore = {
 
     setPreview(target: KickstandPlacementTarget, build: KickstandBuildResult, previewData: SupportData) {
         const state = store.read();
-        if (targetEq(state.snapTarget, target)) return;
+        if (targetEq(state.snapTarget, target) && state.previewData?.error === previewData.error) return;
 
         store.write({ ...state, snapTarget: target, previewBuild: build, previewData });
     },

@@ -12,6 +12,7 @@ export type SupportMode = 'prepare' | 'analysis' | 'support' | 'export' | 'print
 
 export type LimitationCode =
     | 'ANGLE_TOO_STEEP'
+    | 'SHAFT_ANGLE_TOO_FLAT'
     | 'KNOT_ABOVE_TIP'
     | 'STUMP_BELOW_ROOT'
     | 'COLLISION_WITH_MODEL'

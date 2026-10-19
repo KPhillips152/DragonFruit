@@ -7,9 +7,10 @@ import { pushSupportHistory } from '@/supports/history/supportHistory';
 import { addAction } from '@/supports/history/actionTypes';
 import { addSupportEntity, addKnot, addRoot, subscribe, getSnapshot } from '../../state';
 import type { SnapTarget } from '../../interaction/SnappingManager';
-import { getGridSettings } from '../../Settings/state';
+import { getGridSettings, getSettings } from '../../Settings/state';
+import { DEFAULT_SHAFT_MAX_ANGLE_DEG } from '../../Settings/defaults';
 import { snapToGridIndex } from '../../PlacementLogic/Grid/gridMath';
-import { clampKickstandHostT } from './kickstandRules';
+import { clampKickstandHostT, kickstandHasValidAngles } from './kickstandRules';
 import { buildKickstandData, toKickstandPreviewData } from './kickstandBuilder';
 import { getKickstandPlacementOffsetMm } from './kickstandSettings';
 import { kickstandPlacementStore, useKickstandPlacementState, type KickstandPlacementTarget } from './kickstandPlacementState';
@@ -557,7 +558,7 @@ export function KickstandPlacementController() {
 
         const { target, build } = buildPlacementFromSnap(meta, clampedT, snappedPos, rootPos);
         const previewData = toKickstandPreviewData(build);
-        previewData.error = nodeOccupied ? 'TOO_CLOSE_TO_EXISTING' : undefined;
+        if (nodeOccupied) previewData.error = 'TOO_CLOSE_TO_EXISTING';
 
         console.log('[DEBUG Kickstand placement useFrame] Setting preview:', {
             segmentId: meta.segmentId,
@@ -609,6 +610,7 @@ export function KickstandPlacementController() {
             e.preventDefault();
 
             let finalBuild = previewBuild;
+            let finalTarget = snapTarget;
 
             const meta = targetMetaById.get(snapTarget.segmentId);
             const hostRootId = meta?.hostRootId;
@@ -635,7 +637,8 @@ export function KickstandPlacementController() {
                         console.log('[DEBUG Kickstand placement handleClick] Solver failed: resolved root is still occupied');
                         finalBuild = null;
                     } else {
-                        const { build } = buildPlacementFromSnap(meta, snapTarget.t, snapTarget.pos, resolvedRootPos);
+                        const { target, build } = buildPlacementFromSnap(meta, snapTarget.t, snapTarget.pos, resolvedRootPos);
+                        finalTarget = target;
                         finalBuild = build;
                         console.log('[DEBUG Kickstand placement handleClick] Solver succeeded, rebuilt with root:', resolvedRootPos);
                     }
@@ -647,6 +650,12 @@ export function KickstandPlacementController() {
 
             if (!finalBuild) {
                 console.log('[DEBUG Kickstand placement handleClick] Rejected: finalBuild is null or invalid');
+                return;
+            }
+
+            const maxAngleFromVerticalDeg = getSettings().shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG;
+            if (!kickstandHasValidAngles(finalBuild, maxAngleFromVerticalDeg)) {
+                kickstandPlacementStore.setPreview(finalTarget, finalBuild, toKickstandPreviewData(finalBuild));
                 return;
             }
 

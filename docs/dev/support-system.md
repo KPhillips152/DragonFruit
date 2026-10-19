@@ -111,6 +111,33 @@ either case would clear the support selection set.
 - By hand: modifier keys choose the family, the first click's target chooses the type — [Support Placement Modifiers](../reference/support-placement-modifiers.md).
 - Automatically: `autoSupport/` generates candidates from island analysis and overhang regions, then sizes and places a forest. Gated behind an experiment.
 
+### Kickstand placement angles
+
+`kickstandHasValidAngles` in
+`src/supports/SupportTypes/Kickstand/kickstandRules.ts` validates the actual shaft
+members from the root's disk-plus-cone top through the intermediate joints to
+the host knot. It uses the signed upward direction, not the root-to-host chord
+or an absolute Z difference, and includes authored-column builds:
+
+```ts
+const valid = kickstandHasValidAngles(
+  build,
+  settings.shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG,
+);
+```
+
+The angle is measured from vertical; the default 80° limit means at least 10°
+above horizontal. Coincident endpoints within 1e-6 mm have no angle to constrain,
+but noncoincident flat or descending shafts are invalid. Geometry is left intact
+for the preview rather than clamped or moved to make it pass.
+
+`toKickstandPreviewData` marks invalid geometry with `SHAFT_ANGLE_TOO_FLAT`, using
+the existing message shared with shaft warnings. The controller preserves that
+error, and the placement store publishes error changes even if the snap target
+has not moved. On click, validate the final build again using the current angle
+setting, after any occupied-node root relocation and before writing roots, knots,
+the kickstand, or history. Grid snapping must never bypass this check.
+
 ## The placement guide line
 
 Hovering a model in Support mode marks the band where the tip will land: the

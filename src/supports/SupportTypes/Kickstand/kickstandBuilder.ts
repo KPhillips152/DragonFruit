@@ -2,7 +2,9 @@ import type { Joint, Segment } from '../../types';
 import type { SupportData } from '../../rendering/SupportBuilder';
 import { getJointDiameter } from '../../constants';
 import * as THREE from 'three';
-import { assertKickstandHostKind, clampKickstandHostT } from './kickstandRules';
+import { assertKickstandHostKind, clampKickstandHostT, kickstandHasValidAngles } from './kickstandRules';
+import { DEFAULT_SHAFT_MAX_ANGLE_DEG } from '../../Settings/defaults';
+import { getSettings } from '../../Settings/state';
 import {
     getKickstandKnotDiameterMm,
     getKickstandRootProfile,
@@ -25,8 +27,8 @@ function createRootAndJointHeights(input: KickstandBuildInput, rootTopZ: number)
     const hostZ = input.host.pos.z;
     const rawRise = hostZ - rootTopZ;
 
-    // Kickstands are grounded columns first. If the host is very low,
-    // keep a tiny positive vertical chain and let the terminal segment angle as needed.
+    // Keep low-host geometry renderable as a ghost; angle validation rejects
+    // any flat or descending member instead of silently reshaping the support.
     const effectiveRise = Math.max(rawRise, layout.minJointSpacingMm * 2 + layout.minTerminalClearanceMm + 0.01);
 
     let firstJointZ = rootTopZ + effectiveRise * layout.firstJointHeightRatio;
@@ -200,5 +202,8 @@ export function toKickstandPreviewData(build: KickstandBuildResult): SupportData
         roots: build.root,
         segments: previewSegments,
         knot: build.hostKnot,
+        error: kickstandHasValidAngles(build, getSettings().shaft.maxAngleDeg ?? DEFAULT_SHAFT_MAX_ANGLE_DEG)
+            ? undefined
+            : 'SHAFT_ANGLE_TOO_FLAT',
     };
 }

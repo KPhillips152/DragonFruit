@@ -6,6 +6,11 @@ import { MouseTooltip } from '../../components/ui/MouseTooltip';
 
 import { LimitationCode, WarningCode } from '../types';
 
+export const SupportWarnings: Record<WarningCode, MessageDescriptor> = {
+    ANGLE_VERTICAL_WARNING: msg`Horizontal angles are not good for holding up overhangs. They are only good for lateral stability.`,
+    SHAFT_ANGLE_TOO_FLAT: msg`Support angle is too flat (must be >10° from horizontal).`
+};
+
 // Module level so React Compiler cannot rename anything the Lingui macro reads.
 export const SupportLimitations: Record<LimitationCode, MessageDescriptor> = {
     ANGLE_TOO_STEEP: msg`Surface angle is upward facing. Supports cannot be placed here.`,
@@ -13,13 +18,10 @@ export const SupportLimitations: Record<LimitationCode, MessageDescriptor> = {
     STUMP_BELOW_ROOT: msg`Contact point is lower than the stump root — the shaft would extend below the root joint.`,
     COLLISION_WITH_MODEL: msg`Support would collide with the model geometry.`,
     TOO_CLOSE_TO_EXISTING: msg`Too close to an existing support.`,
-    OUT_OF_BOUNDS: msg`Support placement is outside the build volume.`
+    OUT_OF_BOUNDS: msg`Support placement is outside the build volume.`,
+    SHAFT_ANGLE_TOO_FLAT: SupportWarnings.SHAFT_ANGLE_TOO_FLAT,
 };
 
-export const SupportWarnings: Record<WarningCode, MessageDescriptor> = {
-    ANGLE_VERTICAL_WARNING: msg`Horizontal angles are not good for holding up overhangs. They are only good for lateral stability.`,
-    SHAFT_ANGLE_TOO_FLAT: msg`Support angle is too flat (must be >10° from horizontal).`
-};
 
 export function getLimitationMessage(
     code: LimitationCode | WarningCode,

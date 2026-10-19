@@ -26,6 +26,14 @@ A kickstand is a grounded support that starts on the plate or raft and ends by s
 - The host target must be a trunk or branch shaft.
 - Kickstands do not use a contact cone at the top.
 - They do not attach to twigs, sticks, or braces at the top.
+- Every shaft member, including the final connection to the host, must rise
+  within **Shaft → Max Angle**, measured from vertical. The default 80° limit
+  requires at least 10° above horizontal. Flat and descending members are invalid.
+- The same angle limit applies with grid mode on or off. A low host or a distant
+  grid root produces a red invalid preview rather than an unrestricted bridge.
+- Clicking an invalid preview adds no kickstand. If an occupied grid node moves
+  the proposed root, the rebuilt geometry must pass the angle check too.
+
 
 ## Related
 
