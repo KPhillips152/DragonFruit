@@ -3003,6 +3003,7 @@ pub fn rasterize_layer_with_stats(
             *dst = *src;
         }
     }
+    crate::pipeline::return_mask_to_pool(support_mask);
 
     let pixel_area_mm2 = ((job.build_width_mm as f64) / (job.source_width_px.max(1) as f64))
         * ((job.build_depth_mm as f64) / (job.source_height_px.max(1) as f64));
@@ -3064,6 +3065,7 @@ pub fn rasterize_layer_rle(
             compute_area_stats,
         );
         let runs = encode_mask_to_rle(&mask, width, height);
+        crate::pipeline::return_mask_to_pool(mask);
         return (runs, stats);
     }
 
@@ -3582,6 +3584,7 @@ pub fn rasterize_layer_rle_block(
             let row_start = row * full_width;
             window_mask.extend_from_slice(&mask[row_start + wstart..row_start + wend]);
         }
+        crate::pipeline::return_mask_to_pool(mask);
         let runs = encode_mask_to_rle(&window_mask, wwidth, height);
         let stats = window_stats_from_runs(
             &runs,
@@ -5039,12 +5042,15 @@ impl SupportHaloPrecalc {
         let dither_lut = match dither_palette {
             Some(p) => Some(build_halo_dither_lut(p, gamma)),
             None => job.effective_dither_bit_depth().map(|bit_depth| {
-                let mut identity_lut = [0u8; 256];
-                for i in 0..256 {
-                    identity_lut[i] = i as u8;
-                }
+                let lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
+                    let mut identity_lut = [0u8; 256];
+                    for i in 0..256 {
+                        identity_lut[i] = i as u8;
+                    }
+                    identity_lut
+                });
                 let owned_palette =
-                    crate::dither::DitherPaletteV3::new(&identity_lut, gamma as f64, bit_depth);
+                    crate::dither::DitherPaletteV3::new(&lut, gamma as f64, bit_depth);
                 build_halo_dither_lut(&owned_palette, gamma)
             }),
         };
@@ -5289,13 +5295,39 @@ fn gate_thin_support_spans(spans: &mut [SupportRowSpan], max_d_px: u32) {
     }
 }
 
-fn classify_support_spans_with_precalc(spans: &mut [SupportRowSpan], precalc: &SupportHaloPrecalc) {
-    let n = spans.len();
+#[derive(Default)]
+struct HaloScratchBuffers {
+    spans: Vec<SupportRowSpan>,
+    parent: Vec<usize>,
+    dist_to_wide: Vec<u32>,
+    rows: Vec<(usize, usize, usize)>,
+    comp_min_x: Vec<usize>,
+    comp_max_x: Vec<usize>,
+    comp_min_y: Vec<usize>,
+    comp_max_y: Vec<usize>,
+    comp_area_px: Vec<usize>,
+    comp_bucket: Vec<u8>,
+    comp_is_small: Vec<bool>,
+    ring: Vec<u16>,
+    row_bytes: Vec<u8>,
+    slot_bounds: Vec<(usize, usize)>,
+}
+
+thread_local! {
+    static HALO_SCRATCH: std::cell::RefCell<HaloScratchBuffers> =
+        std::cell::RefCell::new(HaloScratchBuffers::default());
+}
+
+fn classify_support_spans_with_precalc_in_scratch(
+    scratch: &mut HaloScratchBuffers,
+    precalc: &SupportHaloPrecalc,
+) {
+    let n = scratch.spans.len();
     if n == 0 {
         return;
     }
     if !precalc.tips_only {
-        for s in spans.iter_mut() {
+        for s in scratch.spans.iter_mut() {
             s.emit_halo = true;
             s.bucket_idx = 0;
         }
@@ -5308,100 +5340,113 @@ fn classify_support_spans_with_precalc(spans: &mut [SupportRowSpan], precalc: &S
     let step_mm = (d_max_mm / (NUM_HALO_DIAMETER_BUCKETS as f32)).max(1e-4);
     let inf_dist = u32::MAX / 2;
 
-    let mut parent: Vec<usize> = (0..n).collect();
-    let mut dist_to_wide: Vec<u32> = spans
-        .iter()
-        .map(|s| {
-            let span_w = s.x_end - s.x_start;
-            let span_w_mm = (span_w as f32) * precalc.pitch_x_mm;
-            if span_w > max_dx || span_w_mm >= d_max_mm - 1e-5 {
-                0
-            } else {
-                inf_dist
-            }
-        })
-        .collect();
+    scratch.parent.clear();
+    scratch.parent.extend(0..n);
 
-    let mut rows: Vec<(usize, usize, usize)> = Vec::new();
+    scratch.dist_to_wide.clear();
+    scratch.dist_to_wide.reserve(n);
+    let mut any_wide_span = false;
+    for s in &scratch.spans {
+        let span_w = s.x_end - s.x_start;
+        let span_w_mm = (span_w as f32) * precalc.pitch_x_mm;
+        if span_w > max_dx || span_w_mm >= d_max_mm - 1e-5 {
+            scratch.dist_to_wide.push(0);
+            any_wide_span = true;
+        } else {
+            scratch.dist_to_wide.push(inf_dist);
+        }
+    }
+
+    scratch.rows.clear();
     let mut r_start = 0usize;
     for i in 1..=n {
-        if i == n || spans[i].y != spans[r_start].y {
-            rows.push((spans[r_start].y, r_start, i));
+        if i == n || scratch.spans[i].y != scratch.spans[r_start].y {
+            scratch.rows.push((scratch.spans[r_start].y, r_start, i));
             r_start = i;
         }
     }
 
-    for r_idx in 1..rows.len() {
-        let (prev_y, p0, p1) = rows[r_idx - 1];
-        let (curr_y, c0, c1) = rows[r_idx];
+    let rows_len = scratch.rows.len();
+    for r_idx in 1..rows_len {
+        let (prev_y, p0, p1) = scratch.rows[r_idx - 1];
+        let (curr_y, c0, c1) = scratch.rows[r_idx];
         if prev_y + 1 != curr_y {
             continue;
         }
         let mut p = p0;
         for c in c0..c1 {
-            let cx0 = spans[c].x_start;
-            let cx1 = spans[c].x_end;
-            while p < p1 && spans[p].x_end < cx0 {
+            let cx0 = scratch.spans[c].x_start;
+            let cx1 = scratch.spans[c].x_end;
+            while p < p1 && scratch.spans[p].x_end < cx0 {
                 p += 1;
             }
             let mut scan_p = p;
-            while scan_p < p1 && spans[scan_p].x_start <= cx1 {
-                let ra = find_root_span(&mut parent, scan_p);
-                let rb = find_root_span(&mut parent, c);
+            while scan_p < p1 && scratch.spans[scan_p].x_start <= cx1 {
+                let ra = find_root_span(&mut scratch.parent, scan_p);
+                let rb = find_root_span(&mut scratch.parent, c);
                 if ra != rb {
                     if ra < rb {
-                        parent[rb] = ra;
+                        scratch.parent[rb] = ra;
                     } else {
-                        parent[ra] = rb;
+                        scratch.parent[ra] = rb;
                     }
                 }
-                let cand = dist_to_wide[scan_p].saturating_add(1);
-                if cand < dist_to_wide[c] {
-                    dist_to_wide[c] = cand;
+                if any_wide_span {
+                    let cand = scratch.dist_to_wide[scan_p].saturating_add(1);
+                    if cand < scratch.dist_to_wide[c] {
+                        scratch.dist_to_wide[c] = cand;
+                    }
                 }
                 scan_p += 1;
             }
         }
     }
 
-    for r_idx in (0..rows.len().saturating_sub(1)).rev() {
-        let (curr_y, c0, c1) = rows[r_idx];
-        let (next_y, n0, n1) = rows[r_idx + 1];
-        if curr_y + 1 != next_y {
-            continue;
-        }
-        let mut nx = n0;
-        for c in c0..c1 {
-            let cx0 = spans[c].x_start;
-            let cx1 = spans[c].x_end;
-            while nx < n1 && spans[nx].x_end < cx0 {
-                nx += 1;
+    if any_wide_span {
+        for r_idx in (0..rows_len.saturating_sub(1)).rev() {
+            let (curr_y, c0, c1) = scratch.rows[r_idx];
+            let (next_y, n0, n1) = scratch.rows[r_idx + 1];
+            if curr_y + 1 != next_y {
+                continue;
             }
-            let mut scan_n = nx;
-            while scan_n < n1 && spans[scan_n].x_start <= cx1 {
-                let cand = dist_to_wide[scan_n].saturating_add(1);
-                if cand < dist_to_wide[c] {
-                    dist_to_wide[c] = cand;
+            let mut nx = n0;
+            for c in c0..c1 {
+                let cx0 = scratch.spans[c].x_start;
+                let cx1 = scratch.spans[c].x_end;
+                while nx < n1 && scratch.spans[nx].x_end < cx0 {
+                    nx += 1;
                 }
-                scan_n += 1;
+                let mut scan_n = nx;
+                while scan_n < n1 && scratch.spans[scan_n].x_start <= cx1 {
+                    let cand = scratch.dist_to_wide[scan_n].saturating_add(1);
+                    if cand < scratch.dist_to_wide[c] {
+                        scratch.dist_to_wide[c] = cand;
+                    }
+                    scan_n += 1;
+                }
             }
         }
     }
 
-    let mut comp_min_x = vec![usize::MAX; n];
-    let mut comp_max_x = vec![0usize; n];
-    let mut comp_min_y = vec![usize::MAX; n];
-    let mut comp_max_y = vec![0usize; n];
-    let mut comp_area_px = vec![0usize; n];
+    scratch.comp_min_x.clear();
+    scratch.comp_min_x.resize(n, usize::MAX);
+    scratch.comp_max_x.clear();
+    scratch.comp_max_x.resize(n, 0);
+    scratch.comp_min_y.clear();
+    scratch.comp_min_y.resize(n, usize::MAX);
+    scratch.comp_max_y.clear();
+    scratch.comp_max_y.resize(n, 0);
+    scratch.comp_area_px.clear();
+    scratch.comp_area_px.resize(n, 0);
 
     for i in 0..n {
-        let r = find_root_span(&mut parent, i);
-        let s = &spans[i];
-        comp_min_x[r] = comp_min_x[r].min(s.x_start);
-        comp_max_x[r] = comp_max_x[r].max(s.x_end - 1);
-        comp_min_y[r] = comp_min_y[r].min(s.y);
-        comp_max_y[r] = comp_max_y[r].max(s.y);
-        comp_area_px[r] += s.x_end - s.x_start;
+        let r = find_root_span(&mut scratch.parent, i);
+        let s = &scratch.spans[i];
+        scratch.comp_min_x[r] = scratch.comp_min_x[r].min(s.x_start);
+        scratch.comp_max_x[r] = scratch.comp_max_x[r].max(s.x_end - 1);
+        scratch.comp_min_y[r] = scratch.comp_min_y[r].min(s.y);
+        scratch.comp_max_y[r] = scratch.comp_max_y[r].max(s.y);
+        scratch.comp_area_px[r] += s.x_end - s.x_start;
     }
 
     let cap_look_rows = ((max_dy / 2) + 2) as u32;
@@ -5414,38 +5459,55 @@ fn classify_support_spans_with_precalc(spans: &mut [SupportRowSpan], precalc: &S
         }
     };
 
-    for i in 0..n {
-        let r = parent[i];
-        let comp_w = comp_max_x[r] - comp_min_x[r] + 1;
-        let comp_h = comp_max_y[r] - comp_min_y[r] + 1;
+    scratch.comp_bucket.clear();
+    scratch.comp_bucket.resize(n, HALO_BUCKET_NONE);
+    scratch.comp_is_small.clear();
+    scratch.comp_is_small.resize(n, false);
+
+    let area_to_mm2_factor = 4.0 * precalc.pitch_x_mm * precalc.pitch_y_mm / core::f32::consts::PI;
+    for r in 0..n {
+        if scratch.parent[r] != r || scratch.comp_area_px[r] == 0 {
+            continue;
+        }
+        let comp_w = scratch.comp_max_x[r] - scratch.comp_min_x[r] + 1;
+        let comp_h = scratch.comp_max_y[r] - scratch.comp_min_y[r] + 1;
         let comp_w_mm = (comp_w as f32) * precalc.pitch_x_mm;
         let comp_h_mm = (comp_h as f32) * precalc.pitch_y_mm;
-        let comp_area_mm2 = (comp_area_px[r] as f32) * precalc.pitch_x_mm * precalc.pitch_y_mm;
-        let comp_d_blob_mm = (4.0 * comp_area_mm2 / core::f32::consts::PI)
-            .sqrt()
-            .min(comp_w_mm.max(comp_h_mm));
-        if comp_w_mm <= 1.5 * d_max_mm
-            && comp_h_mm <= 1.5 * d_max_mm
-            && comp_d_blob_mm < d_max_mm - 1e-5
-        {
-            let b = map_d_to_bucket(comp_d_blob_mm);
-            spans[i].bucket_idx = b;
-            spans[i].emit_halo = b != HALO_BUCKET_NONE;
-        } else {
-            let span_w = spans[i].x_end - spans[i].x_start;
+        if comp_w_mm <= 1.5 * d_max_mm && comp_h_mm <= 1.5 * d_max_mm {
+            let comp_d_blob_mm = ((scratch.comp_area_px[r] as f32) * area_to_mm2_factor)
+                .sqrt()
+                .min(comp_w_mm.max(comp_h_mm));
+            if comp_d_blob_mm < d_max_mm - 1e-5 {
+                scratch.comp_is_small[r] = true;
+                scratch.comp_bucket[r] = map_d_to_bucket(comp_d_blob_mm);
+            }
+        }
+    }
+
+    for i in 0..n {
+        let r = scratch.parent[i];
+        if scratch.comp_is_small[r] {
+            let b = scratch.comp_bucket[r];
+            scratch.spans[i].bucket_idx = b;
+            scratch.spans[i].emit_halo = b != HALO_BUCKET_NONE;
+        } else if any_wide_span {
+            let span_w = scratch.spans[i].x_end - scratch.spans[i].x_start;
             let span_d_mm = (span_w as f32) * precalc.pitch_x_mm;
             if span_w <= max_dx
                 && span_d_mm < d_max_mm - 1e-5
-                && dist_to_wide[i] > cap_look_rows
-                && dist_to_wide[i] < inf_dist / 2
+                && scratch.dist_to_wide[i] > cap_look_rows
+                && scratch.dist_to_wide[i] < inf_dist / 2
             {
                 let b = map_d_to_bucket(span_d_mm);
-                spans[i].bucket_idx = b;
-                spans[i].emit_halo = b != HALO_BUCKET_NONE;
+                scratch.spans[i].bucket_idx = b;
+                scratch.spans[i].emit_halo = b != HALO_BUCKET_NONE;
             } else {
-                spans[i].bucket_idx = HALO_BUCKET_NONE;
-                spans[i].emit_halo = false;
+                scratch.spans[i].bucket_idx = HALO_BUCKET_NONE;
+                scratch.spans[i].emit_halo = false;
             }
+        } else {
+            scratch.spans[i].bucket_idx = HALO_BUCKET_NONE;
+            scratch.spans[i].emit_halo = false;
         }
     }
 }
@@ -5468,41 +5530,53 @@ pub fn apply_euclidean_radial_halo_rle_with_precalc(
         return support_runs.to_vec();
     }
 
-    let total_pixels = width * height;
-    let mut abs_pos = 0usize;
-    let mut spans: Vec<SupportRowSpan> = Vec::new();
-    let mut min_x = width;
-    let mut max_x = 0usize;
-    let mut min_y = height;
-    let mut max_y = 0usize;
+    HALO_SCRATCH.with(|cell| {
+        let mut scratch = cell.borrow_mut();
+        scratch.spans.clear();
 
-    for run in support_runs {
-        let len = run.length as usize;
-        if len == 0 {
-            continue;
-        }
-        if run.value == 0 {
-            abs_pos = abs_pos.saturating_add(len);
-            continue;
-        }
+        let total_pixels = width * height;
+        let mut abs_pos = 0usize;
+        let mut min_x = width;
+        let mut max_x = 0usize;
+        let mut min_y = height;
+        let mut max_y = 0usize;
 
-        let mut rem = len;
-        while rem > 0 && abs_pos < total_pixels {
-            let in_y = abs_pos / width;
-            let x_start = abs_pos % width;
-            let take = rem.min(width - x_start);
-            let x_end = x_start + take;
+        for run in support_runs {
+            let len = run.length as usize;
+            if len == 0 {
+                continue;
+            }
+            if run.value == 0 {
+                abs_pos = abs_pos.saturating_add(len);
+                continue;
+            }
 
-            min_x = min_x.min(x_start);
-            max_x = max_x.max(x_end - 1);
-            min_y = min_y.min(in_y);
-            max_y = max_y.max(in_y);
+            let mut rem = len;
+            while rem > 0 && abs_pos < total_pixels {
+                let in_y = abs_pos / width;
+                let x_start = abs_pos % width;
+                let take = rem.min(width - x_start);
+                let x_end = x_start + take;
 
-            if let Some(last) = spans.last_mut() {
-                if last.y == in_y && last.x_end == x_start {
-                    last.x_end = x_end;
+                min_x = min_x.min(x_start);
+                max_x = max_x.max(x_end - 1);
+                min_y = min_y.min(in_y);
+                max_y = max_y.max(in_y);
+
+                if let Some(last) = scratch.spans.last_mut() {
+                    if last.y == in_y && last.x_end == x_start {
+                        last.x_end = x_end;
+                    } else {
+                        scratch.spans.push(SupportRowSpan {
+                            y: in_y,
+                            x_start,
+                            x_end,
+                            emit_halo: true,
+                            bucket_idx: 0,
+                        });
+                    }
                 } else {
-                    spans.push(SupportRowSpan {
+                    scratch.spans.push(SupportRowSpan {
                         y: in_y,
                         x_start,
                         x_end,
@@ -5510,171 +5584,192 @@ pub fn apply_euclidean_radial_halo_rle_with_precalc(
                         bucket_idx: 0,
                     });
                 }
+
+                abs_pos += take;
+                rem -= take;
+            }
+        }
+
+        if scratch.spans.is_empty() {
+            return support_runs.to_vec();
+        }
+
+        classify_support_spans_with_precalc_in_scratch(&mut scratch, precalc);
+
+        let roi_min_x = min_x.saturating_sub(rx_pad);
+        let roi_max_x = (max_x + rx_pad).min(width - 1);
+        let roi_min_y = min_y.saturating_sub(ry_pad);
+        let roi_max_y = (max_y + ry_pad).min(height - 1);
+        let roi_w = roi_max_x - roi_min_x + 1;
+
+        let ring_cap = 2 * ry_pad + 1;
+        let ring_len = ring_cap * roi_w;
+        if scratch.ring.len() < ring_len {
+            scratch.ring.resize(ring_len, 0);
+        }
+        if scratch.row_bytes.len() < roi_w {
+            scratch.row_bytes.resize(roi_w, 0);
+        }
+        scratch.slot_bounds.clear();
+        scratch.slot_bounds.resize(ring_cap, (usize::MAX, 0));
+
+        let HaloScratchBuffers {
+            ref spans,
+            ref mut ring,
+            ref mut row_bytes,
+            ref mut slot_bounds,
+            ..
+        } = *scratch;
+
+        let mut out_rle = RleAccum::new();
+        emit_zero_rows(&mut out_rle, roi_min_y, width);
+
+        let flush_ring_row = |target_y: usize,
+                              ring: &mut [u16],
+                              row_bytes: &mut [u8],
+                              slot_bounds: &mut [(usize, usize)],
+                              out_rle: &mut RleAccum| {
+            let slot = (target_y - roi_min_y) % ring_cap;
+            let (b_min, b_max) = slot_bounds[slot];
+            if b_min > b_max {
+                emit_zero_rows(out_rle, 1, width);
             } else {
-                spans.push(SupportRowSpan {
-                    y: in_y,
-                    x_start,
-                    x_end,
-                    emit_halo: true,
-                    bucket_idx: 0,
-                });
-            }
-
-            abs_pos += take;
-            rem -= take;
-        }
-    }
-
-    if spans.is_empty() {
-        return support_runs.to_vec();
-    }
-
-    classify_support_spans_with_precalc(&mut spans, precalc);
-
-    let roi_min_x = min_x.saturating_sub(rx_pad);
-    let roi_max_x = (max_x + rx_pad).min(width - 1);
-    let roi_min_y = min_y.saturating_sub(ry_pad);
-    let roi_max_y = (max_y + ry_pad).min(height - 1);
-    let roi_w = roi_max_x - roi_min_x + 1;
-    let right_zeros = width - 1 - roi_max_x;
-
-    let ring_cap = 2 * ry_pad + 1;
-    let mut ring = vec![0u16; ring_cap * roi_w];
-    let mut row_bytes = vec![0u8; roi_w];
-    let mut slot_dirty = vec![false; ring_cap];
-
-    let mut out_rle = RleAccum::new();
-    emit_zero_rows(&mut out_rle, roi_min_y, width);
-
-    let flush_ring_row = |target_y: usize,
-                          ring: &mut [u16],
-                          row_bytes: &mut [u8],
-                          slot_dirty: &mut [bool],
-                          out_rle: &mut RleAccum| {
-        let slot = (target_y - roi_min_y) % ring_cap;
-        if !slot_dirty[slot] {
-            emit_zero_rows(out_rle, 1, width);
-        } else {
-            let slot_offset = slot * roi_w;
-            let row_slice = &mut ring[slot_offset..slot_offset + roi_w];
-            if let Some(ref dither_lut) = precalc.dither_lut {
-                let lut_row = &dither_lut[target_y & 7];
-                for (ix, &word) in row_slice.iter().enumerate() {
-                    let v = (word & 0xFF) as u8;
-                    row_bytes[ix] = if v > 0 && v < 255 {
-                        lut_row[v as usize][(roi_min_x + ix) & 7]
-                    } else {
-                        v
-                    };
-                }
-            } else {
-                for (ix, &word) in row_slice.iter().enumerate() {
-                    row_bytes[ix] = (word & 0xFF) as u8;
-                }
-            }
-            if roi_min_x > 0 {
-                out_rle.push_run(roi_min_x as u32, 0);
-            }
-            emit_row(out_rle, row_bytes);
-            if right_zeros > 0 {
-                out_rle.push_run(right_zeros as u32, 0);
-            }
-            row_slice.fill(0);
-            slot_dirty[slot] = false;
-        }
-    };
-
-    let mut next_unflushed_y = roi_min_y;
-
-    for span in &spans {
-        let in_y = span.y;
-        let x_start = span.x_start;
-        let x_end = span.x_end;
-
-        while next_unflushed_y + ry_pad < in_y && next_unflushed_y <= roi_max_y {
-            flush_ring_row(
-                next_unflushed_y,
-                &mut ring,
-                &mut row_bytes,
-                &mut slot_dirty,
-                &mut out_rle,
-            );
-            next_unflushed_y += 1;
-        }
-
-        let ix0 = x_start - roi_min_x;
-        let ix1 = x_end - roi_min_x;
-
-        if !span.emit_halo || span.bucket_idx == HALO_BUCKET_NONE {
-            let slot = (in_y - roi_min_y) % ring_cap;
-            slot_dirty[slot] = true;
-            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
-            row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
-            continue;
-        }
-
-        let row_kernels = &precalc.buckets[span.bucket_idx as usize].row_kernels;
-        if row_kernels.is_empty() {
-            let slot = (in_y - roi_min_y) % ring_cap;
-            slot_dirty[slot] = true;
-            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
-            row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
-            continue;
-        }
-
-        for rk in row_kernels {
-            let ty_isize = in_y as isize + rk.dy;
-            if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
-                continue;
-            }
-            let ty = ty_isize as usize;
-            let slot = (ty - roi_min_y) % ring_cap;
-            slot_dirty[slot] = true;
-            let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
-
-            if rk.interior_word == CORE_SUPPORT_WORD {
-                row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
-            } else if rk.interior_word > 0 {
-                for px in &mut row_slice[ix0..ix1] {
-                    if rk.interior_word > *px {
-                        *px = rk.interior_word;
+                let slot_offset = slot * roi_w;
+                let active_len = b_max - b_min + 1;
+                let active_ring = &mut ring[slot_offset + b_min..=slot_offset + b_max];
+                let active_bytes = &mut row_bytes[..active_len];
+                if let Some(ref dither_lut) = precalc.dither_lut {
+                    let lut_row = &dither_lut[target_y & 7];
+                    let base_x = roi_min_x + b_min;
+                    for (offset, &word) in active_ring.iter().enumerate() {
+                        let v = (word & 0xFF) as u8;
+                        active_bytes[offset] = if v > 0 && v < 255 {
+                            lut_row[v as usize][(base_x + offset) & 7]
+                        } else {
+                            v
+                        };
+                    }
+                } else {
+                    for (offset, &word) in active_ring.iter().enumerate() {
+                        active_bytes[offset] = (word & 0xFF) as u8;
                     }
                 }
+                let left_zeros = roi_min_x + b_min;
+                if left_zeros > 0 {
+                    out_rle.push_run(left_zeros as u32, 0);
+                }
+                emit_row(out_rle, active_bytes);
+                let row_right_zeros = width - 1 - (roi_min_x + b_max);
+                if row_right_zeros > 0 {
+                    out_rle.push_run(row_right_zeros as u32, 0);
+                }
+                active_ring.fill(0);
+                slot_bounds[slot] = (usize::MAX, 0);
+            }
+        };
+
+        let mut next_unflushed_y = roi_min_y;
+
+        for span in spans {
+            let in_y = span.y;
+            let x_start = span.x_start;
+            let x_end = span.x_end;
+
+            while next_unflushed_y + ry_pad < in_y && next_unflushed_y <= roi_max_y {
+                flush_ring_row(
+                    next_unflushed_y,
+                    ring,
+                    row_bytes,
+                    slot_bounds,
+                    &mut out_rle,
+                );
+                next_unflushed_y += 1;
             }
 
-            for &(dx, cap_word) in &rk.caps {
-                if let Some(lx) = x_start.checked_sub(dx) {
-                    if lx >= roi_min_x {
-                        let idx = lx - roi_min_x;
+            let ix0 = x_start - roi_min_x;
+            let ix1 = x_end - roi_min_x;
+
+            if !span.emit_halo || span.bucket_idx == HALO_BUCKET_NONE {
+                let slot = (in_y - roi_min_y) % ring_cap;
+                let bounds = &mut slot_bounds[slot];
+                bounds.0 = bounds.0.min(ix0);
+                bounds.1 = bounds.1.max(ix1 - 1);
+                let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+                row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
+                continue;
+            }
+
+            let row_kernels = &precalc.buckets[span.bucket_idx as usize].row_kernels;
+            if row_kernels.is_empty() {
+                let slot = (in_y - roi_min_y) % ring_cap;
+                let bounds = &mut slot_bounds[slot];
+                bounds.0 = bounds.0.min(ix0);
+                bounds.1 = bounds.1.max(ix1 - 1);
+                let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+                row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
+                continue;
+            }
+
+            for rk in row_kernels {
+                let ty_isize = in_y as isize + rk.dy;
+                if ty_isize < roi_min_y as isize || ty_isize > roi_max_y as isize {
+                    continue;
+                }
+                let ty = ty_isize as usize;
+                let slot = (ty - roi_min_y) % ring_cap;
+                let max_cap_dx = rk.caps.last().map(|&(dx, _)| dx).unwrap_or(0);
+                let touch_min = x_start.saturating_sub(max_cap_dx).max(roi_min_x) - roi_min_x;
+                let touch_max = (x_end - 1 + max_cap_dx).min(roi_max_x) - roi_min_x;
+                let bounds = &mut slot_bounds[slot];
+                bounds.0 = bounds.0.min(touch_min);
+                bounds.1 = bounds.1.max(touch_max);
+
+                let row_slice = &mut ring[slot * roi_w..(slot + 1) * roi_w];
+
+                if rk.interior_word == CORE_SUPPORT_WORD {
+                    row_slice[ix0..ix1].fill(CORE_SUPPORT_WORD);
+                } else if rk.interior_word > 0 {
+                    for px in &mut row_slice[ix0..ix1] {
+                        if rk.interior_word > *px {
+                            *px = rk.interior_word;
+                        }
+                    }
+                }
+
+                for &(dx, cap_word) in &rk.caps {
+                    if let Some(lx) = x_start.checked_sub(dx) {
+                        if lx >= roi_min_x {
+                            let idx = lx - roi_min_x;
+                            if cap_word > row_slice[idx] {
+                                row_slice[idx] = cap_word;
+                            }
+                        }
+                    }
+                    let rx = x_end - 1 + dx;
+                    if rx <= roi_max_x {
+                        let idx = rx - roi_min_x;
                         if cap_word > row_slice[idx] {
                             row_slice[idx] = cap_word;
                         }
                     }
                 }
-                let rx = x_end - 1 + dx;
-                if rx <= roi_max_x {
-                    let idx = rx - roi_min_x;
-                    if cap_word > row_slice[idx] {
-                        row_slice[idx] = cap_word;
-                    }
-                }
             }
         }
-    }
 
-    while next_unflushed_y <= roi_max_y {
-        flush_ring_row(
-            next_unflushed_y,
-            &mut ring,
-            &mut row_bytes,
-            &mut slot_dirty,
-            &mut out_rle,
-        );
-        next_unflushed_y += 1;
-    }
+        while next_unflushed_y <= roi_max_y {
+            flush_ring_row(
+                next_unflushed_y,
+                ring,
+                row_bytes,
+                slot_bounds,
+                &mut out_rle,
+            );
+            next_unflushed_y += 1;
+        }
 
-    emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
-    out_rle.finish()
+        emit_zero_rows(&mut out_rle, height - 1 - roi_max_y, width);
+        out_rle.finish()
+    })
 }
 
 pub fn apply_euclidean_radial_halo_dense_with_precalc(
@@ -8258,4 +8353,103 @@ mod tests {
             assert_eq!(bounds, Some((0, width - 1, 0, height - 1)));
         }
     }
+
+    #[test]
+    fn sparse_ring_flush_matches_multi_island_halo_rle_bit_for_bit() {
+        let width = 256usize;
+        let height = 128usize;
+        let pitch_mm = 0.025f32;
+        let mut mask = vec![0u8; width * height];
+
+        let mut stamp_square = |cx: usize, cy: usize, size: usize| {
+            let x0 = cx - size / 2;
+            let y0 = cy - size / 2;
+            for y in y0..(y0 + size) {
+                for x in x0..(x0 + size) {
+                    mask[y * width + x] = 255;
+                }
+            }
+        };
+
+        // 1. Two widely separated thin tips on the same row band (y ~ 20) to exercise wide roi_w with sparse active columns
+        stamp_square(24, 20, 8);   // 0.20 mm tip on far left
+        stamp_square(232, 20, 12); // 0.30 mm tip on far right
+        // 2. Disconnected thin tip after a large vertical empty row gap (y ~ 64)
+        stamp_square(128, 64, 16); // 0.40 mm tip in center
+        // 3. Wide raft/trunk at bottom (y ~ 102, 48x20 px = 1.20x0.50 mm >= D_max) that must emit zero halo
+        for y in 92..112 {
+            for x in 40..88 {
+                mask[y * width + x] = 255;
+            }
+        }
+
+        let support_runs = encode_mask_to_rle(&mask, width, height);
+        let job = SliceJobV3 {
+            source_width_px: width as u32,
+            source_height_px: height as u32,
+            width_px: width as u32,
+            height_px: height as u32,
+            build_width_mm: (width as f32) * pitch_mm,
+            build_depth_mm: (height as f32) * pitch_mm,
+            support_halo_enabled: true,
+            support_halo_radius_px: 6,
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.80,
+            dither_device_gamma: 3.0,
+            ..Default::default()
+        };
+
+        let precalc = super::SupportHaloPrecalc::from_job(&job, None)
+            .expect("precalc should be active");
+
+        let runs_first = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            width,
+            height,
+            &precalc,
+        );
+        // Exercise thread-local scratch reuse across an empty layer and a second pass
+        let empty_runs = encode_mask_to_rle(&vec![0u8; width * height], width, height);
+        let empty_halo = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &empty_runs,
+            width,
+            height,
+            &precalc,
+        );
+        assert_eq!(expand_rle_to_mask(&empty_halo, width * height), vec![0u8; width * height]);
+
+        let runs_second = super::apply_euclidean_radial_halo_rle_with_precalc(
+            &support_runs,
+            width,
+            height,
+            &precalc,
+        );
+        assert_eq!(
+            runs_first, runs_second,
+            "repeated halo RLE evaluation with thread-local scratch reuse must be bit-identical"
+        );
+
+        let total_len: usize = runs_first.iter().map(|r| r.length as usize).sum();
+        assert_eq!(total_len, width * height, "RLE run lengths must sum to exact frame pixel count");
+
+        let out = expand_rle_to_mask(&runs_first, width * height);
+        // Core pixels preserved
+        for (idx, &src) in mask.iter().enumerate() {
+            if src == 255 {
+                assert_eq!(out[idx], 255, "core pixel at {idx} lost 255");
+            }
+        }
+        // Empty gap between left tip (x=24) and right tip (x=232) on row 20 must remain 0
+        assert!(out[20 * width + 60..20 * width + 190].iter().all(|&v| v == 0));
+        // Empty row band between y=35 and y=50 must remain 0
+        assert!(out[35 * width..50 * width].iter().all(|&v| v == 0));
+        // Wide raft at y=92..112, x=40..88 must have zero halo collar around it
+        assert_eq!(out[90 * width + 64], 0);
+        assert_eq!(out[113 * width + 64], 0);
+        assert_eq!(out[100 * width + 38], 0);
+        assert_eq!(out[100 * width + 90], 0);
+    }
 }
+

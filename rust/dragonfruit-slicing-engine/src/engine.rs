@@ -125,7 +125,7 @@ fn ssaa_downsample_min_alpha_u8(blur_radius: usize, min_alpha_u8: u8) -> u8 {
     }
 }
 
-fn merge_rle_max(
+pub(crate) fn merge_rle_max(
     lhs: Vec<crate::rle::RleRun>,
     rhs: &[crate::rle::RleRun],
 ) -> Vec<crate::rle::RleRun> {
@@ -3801,6 +3801,7 @@ pub fn slice_and_rasterize_rle_v3(
 
     // Wrap on_rle_layer to downsample (if ssaa_factor > 1) and/or blur before
     // forwarding.  When neither applies the closure is a thin pass-through.
+    let mut rle_support_merge_ns = 0u64;
     let mut wrapped_on_rle =
         |layer_idx: u32,
          raster_runs: Vec<crate::rle::RleRun>,
@@ -3834,7 +3835,11 @@ pub fn slice_and_rasterize_rle_v3(
             };
 
             let final_runs = if let Some(support_runs) = support_raster_runs.as_ref() {
-                merge_rle_max(final_runs, support_runs)
+                let merge_start = std::time::Instant::now();
+                let merged = merge_rle_max(final_runs, support_runs);
+                rle_support_merge_ns =
+                    rle_support_merge_ns.saturating_add(merge_start.elapsed().as_nanos() as u64);
+                merged
             } else {
                 final_runs
             };
@@ -3853,6 +3858,7 @@ pub fn slice_and_rasterize_rle_v3(
         cancel_flag,
     )?;
     perf.index_build_ns = index_ns;
+    perf.support_merge_ns = perf.support_merge_ns.saturating_add(rle_support_merge_ns);
 
     Ok((rendered_layers, layer_area_stats, perf))
 }
@@ -3924,30 +3930,39 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         None
     };
 
-    let raster_job_owned: Option<SliceJobV3> =
-        if ssaa_factor > 1 || (blur_radius > 0 && !use_raster_perturbation) {
-            let mut j = job.clone();
-            j.triangles_xyz = Vec::new();
-            j.anti_aliasing_level = "Off".to_string();
-            j.anti_aliasing_mode = "Coverage".to_string();
-            j.blur_brush_radius_px = 0;
-            j.minimum_aa_alpha_percent = 0.0;
-            if ssaa_factor > 1 {
-                j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
-                j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
-                j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
-                j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
-            }
-            Some(j)
-        } else {
-            None
-        };
+    let total_triangles = job.triangles_xyz.len() / 9;
+    let support_split_model_triangle_count =
+        job.support_split_triangle_bounds(total_triangles, ssaa_factor > 1 || blur_radius > 0);
+
+    let raster_job_owned: Option<SliceJobV3> = if ssaa_factor > 1
+        || (blur_radius > 0 && !use_raster_perturbation)
+        || support_split_model_triangle_count.is_some()
+    {
+        let mut j = job.clone();
+        j.triangles_xyz = Vec::new();
+        j.anti_aliasing_level = "Off".to_string();
+        j.anti_aliasing_mode = "Coverage".to_string();
+        j.blur_brush_radius_px = 0;
+        j.minimum_aa_alpha_percent = 0.0;
+        j.aa_on_supports = true;
+        j.model_triangle_count = 0;
+        j.support_halo_enabled = false;
+        j.support_halo_radius_px = 0;
+        j.support_halo_radius_mm = 0.0;
+        if ssaa_factor > 1 {
+            j.source_width_px = job.source_width_px.saturating_mul(ssaa_factor as u32);
+            j.source_height_px = job.source_height_px.saturating_mul(ssaa_factor as u32);
+            j.width_px = job.width_px.saturating_mul(ssaa_factor as u32);
+            j.height_px = job.height_px.saturating_mul(ssaa_factor as u32);
+        }
+        Some(j)
+    } else {
+        None
+    };
     let raster_job = raster_job_owned.as_ref().unwrap_or(job);
 
     let mut triangles = parse_triangles(&job.triangles_xyz);
     project_triangles_inplace(&mut triangles, raster_job);
-    let support_split_model_triangle_count =
-        job.support_split_triangle_bounds(triangles.len(), ssaa_factor > 1 || blur_radius > 0);
     let index_start = std::time::Instant::now();
     let layer_index = build_layer_index(
         &triangles,
@@ -3974,6 +3989,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         sj.model_triangle_count = 0;
         sj.support_halo_enabled = false;
         sj.support_halo_radius_px = 0;
+        sj.support_halo_radius_mm = 0.0;
         sj
     });
 
@@ -3994,6 +4010,8 @@ pub fn slice_and_rasterize_rle_blocks_v3(
             .map(|p| p.max_rx_px.saturating_add(p.max_tip_dx_px))
             .unwrap_or(0),
     );
+    let block_support_merge_ns = AtomicU64::new(0);
+    let block_support_merge_ns_ref = &block_support_merge_ns;
 
     let produce_layer = |layer: u32| -> Result<
         (Vec<crate::pipeline::RleBlockPayload>, LayerAreaStatsV3),
@@ -4147,6 +4165,7 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                 } else {
                     support_super.clone()
                 };
+                let merge_start = std::time::Instant::now();
                 if let Some(precalc) = halo_precalc_ref {
                     support_runs = crate::raster::apply_euclidean_radial_halo_rle_with_precalc(
                         &support_runs,
@@ -4156,6 +4175,10 @@ pub fn slice_and_rasterize_rle_blocks_v3(
                     );
                 }
                 final_runs = merge_rle_max(final_runs, &support_runs);
+                block_support_merge_ns_ref.fetch_add(
+                    merge_start.elapsed().as_nanos() as u64,
+                    Ordering::Relaxed,
+                );
             }
 
             let final_runs = if halo_left > 0 || halo_right > 0 {
@@ -4181,6 +4204,11 @@ pub fn slice_and_rasterize_rle_blocks_v3(
         cancel_flag,
     )?;
     perf.index_build_ns = index_ns;
+    let total_block_support_merge_ns = block_support_merge_ns.load(Ordering::Relaxed);
+    perf.render_ns = perf.render_ns.saturating_sub(total_block_support_merge_ns);
+    perf.support_merge_ns = perf
+        .support_merge_ns
+        .saturating_add(total_block_support_merge_ns);
 
     Ok((layer_area_stats, perf))
 }
@@ -4809,7 +4837,9 @@ pub fn slice_and_rasterize_perturb_3daa_rle_v3(
     perf.post_blur_ns = post_counters.post_blur_ns.load(Ordering::Relaxed);
     perf.encode_dither_ns = post_counters.dither_ns.load(Ordering::Relaxed);
     perf.tail_remap_ns = post_counters.tail_remap_ns.load(Ordering::Relaxed);
-    perf.support_merge_ns = post_counters.support_merge_ns.load(Ordering::Relaxed);
+    perf.support_merge_ns = perf
+        .support_merge_ns
+        .saturating_add(post_counters.support_merge_ns.load(Ordering::Relaxed));
     perf.daa_post_threads = post_worker_count as u32;
     perf.daa_post_buffer_depth = post_buffer as u32;
     Ok((rendered_layers, layer_area_stats, perf))
@@ -4905,14 +4935,13 @@ pub fn slice_and_rasterize_rle_encoded_v3(
     // clone is cheap (reference count bump); the heavy work happens per-layer
     // inside the rayon worker pool.
     //
-    // Dithering is skipped when the output is binary (no anti-aliasing):
-    // binary values (0, 255) map directly to the dither target extremes and
-    // downstream encoders (CTB threshold, 1-bit PNG) undo any multi-level
-    // output, making the Floyd-Steinberg pass pure overhead.
-    let output_is_binary = job.produces_binary_output();
+    // Dithering is skipped when the model has no anti-aliasing (`raw` mode):
+    // binary values (0, 255) map directly to the dither target extremes, and
+    // support halo already quantizes its grayscale taper via `build_halo_dither_lut`.
+    let model_aa_active = ssaa_factor > 1 || blur_radius > 0 || use_raster_perturbation;
     let dither_palette = if let Some(bit_depth) = job
         .effective_dither_bit_depth()
-        .filter(|_| !output_is_binary)
+        .filter(|_| model_aa_active)
     {
         let active_lut = job.normalized_tail_cure_lut().unwrap_or_else(|| {
             let mut identity = [0u8; 256];
@@ -6940,4 +6969,197 @@ mod tests {
             "available RAM reported as {available:?}; the 3DAA gate would fall back to no budget"
         );
     }
+
+    #[test]
+    fn raw_mode_with_support_halo_skips_model_floyd_steinberg_dither_and_uses_halo_lut() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left
+        push_box_triangles(&mut flat, -1.6, 0.0, 0.0, 2.0, 1.2, 1.2);
+        // 12..24: Thin support tip on the right (0.25 mm diameter) on layer 0 only (z: 0.0..1.0)
+        push_box_triangles(&mut flat, 1.6, 0.0, 0.0, 1.0, 0.25, 0.25);
+
+        let job = SliceJobV3 {
+            output_format: ".png".to_string(),
+            source_width_px: 128,
+            source_height_px: 128,
+            width_px: 128,
+            height_px: 128,
+            x_packing_mode: "none".to_string(),
+            build_width_mm: 6.4,
+            build_depth_mm: 6.4,
+            layer_height_mm: 1.0,
+            total_layers: 2,
+            png_compression_strategy: "fastest".to_string(),
+            container_compression_level: 0,
+            anti_aliasing_level: "Off".to_string(),
+            anti_aliasing_mode: "Blur".to_string(),
+            blur_brush_radius_px: 0,
+            aa_on_supports: false,
+            model_triangle_count: 12,
+            support_halo_enabled: true,
+            support_halo_radius_px: 6,
+            support_halo_max_intensity_percent: 25.0,
+            support_halo_profile: "donut".to_string(),
+            support_halo_scope: "tips_only".to_string(),
+            support_halo_max_tip_diameter_mm: 0.80,
+            dither_enabled: true,
+            dither_bit_depth: Some(3),
+            dither_device_gamma: 3.0,
+            triangles_xyz: flat,
+            metadata_json: "{}".to_string(),
+            ..Default::default()
+        };
+
+        let mut identity = [0u8; 256];
+        for (i, v) in identity.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        let palette = crate::dither::DitherPaletteV3::new(&identity, 3.0, 3);
+
+        let mut layers = vec![Vec::new(); 2];
+        let (_rendered, _stats, perf) = super::slice_and_rasterize_rle_encoded_v3(
+            &job,
+            false,
+            std::sync::Arc::new(|_layer, runs| Ok(expand_rle_to_mask(runs, 128 * 128))),
+            |idx, mask| {
+                layers[idx as usize] = mask;
+                Ok(())
+            },
+            None,
+            None,
+        )
+        .expect("raw + support halo slice should succeed");
+
+        // 1. Model has AA Off, so full-frame Floyd-Steinberg dithering must be completely skipped!
+        assert_eq!(
+            perf.encode_dither_ns, 0,
+            "raw mode with support halo must not run Floyd-Steinberg dithering on binary model runs (got encode_dither_ns = {})",
+            perf.encode_dither_ns
+        );
+        // 2. Halo generation + merge time must be attributed to support_merge_ns
+        assert!(
+            perf.support_merge_ns > 0,
+            "support_merge_ns should include support halo generation and RLE merge time"
+        );
+
+        // 3. Layer 0 has the support tip -> quantized halo collar pixels must exist and match 3-bit palette
+        let mut halo_count_l0 = 0usize;
+        for &v in &layers[0] {
+            if v > 0 && v < 255 {
+                halo_count_l0 += 1;
+            }
+            assert!(
+                palette.target_bytes.contains(&v),
+                "layer 0 pixel value {v} is not in 3-bit palette {:?}",
+                palette.target_bytes
+            );
+        }
+        assert!(halo_count_l0 > 0, "layer 0 must contain pre-dithered support halo pixels");
+
+        // 4. Layer 1 has no supports -> only binary 0 and 255 model pixels
+        assert!(
+            layers[1].iter().all(|&v| v == 0 || v == 255),
+            "layer 1 has no supports in raw mode and must be strictly binary (0 or 255)"
+        );
+    }
+
+    #[test]
+    fn rle_blocks_v3_with_support_halo_matches_full_width_across_panel_seams() {
+        let mut flat = Vec::<f32>::new();
+        // 0..12: Model box on the left panel
+        push_box_triangles(&mut flat, -1.8, -1.0, 0.0, 2.0, 1.0, 1.0);
+        // 12..24: Thin support tip centered right on the X=0.0 panel seam (column 64 of 128)
+        push_box_triangles(&mut flat, 0.0, 0.5, 0.0, 2.0, 0.25, 0.25);
+
+        for (aa_level, blur_radius) in [("Off", 0u32), ("2x", 2u32)] {
+            let job = SliceJobV3 {
+                output_format: ".goo".to_string(),
+                format_version: Some("V5.1".to_string()),
+                source_width_px: 128,
+                source_height_px: 128,
+                width_px: 128,
+                height_px: 128,
+                x_packing_mode: "none".to_string(),
+                build_width_mm: 6.4,
+                build_depth_mm: 6.4,
+                layer_height_mm: 1.0,
+                total_layers: 1,
+                png_compression_strategy: "fastest".to_string(),
+                container_compression_level: 0,
+                anti_aliasing_level: aa_level.to_string(),
+                anti_aliasing_mode: "Blur".to_string(),
+                blur_brush_radius_px: blur_radius,
+                blur_brush_kernel: "gaussian".to_string(),
+                blur_brush_sigma_x: 1.0,
+                blur_brush_sigma_y: 1.0,
+                aa_on_supports: false,
+                model_triangle_count: 12,
+                support_halo_enabled: true,
+                support_halo_radius_px: 6,
+                support_halo_max_intensity_percent: 25.0,
+                support_halo_profile: "donut".to_string(),
+                support_halo_scope: "tips_only".to_string(),
+                support_halo_max_tip_diameter_mm: 0.80,
+                dither_device_gamma: 3.0,
+                triangles_xyz: flat.clone(),
+                metadata_json: "{}".to_string(),
+                ..Default::default()
+            };
+
+            let mut full_mask = Vec::new();
+            super::slice_and_rasterize_rle_v3(
+                &job,
+                false,
+                |_idx, runs| {
+                    full_mask = expand_rle_to_mask(&runs, 128 * 128);
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("full-width RLE slice should succeed");
+
+            let blocks = [
+                crate::rle::make_rle_block(0, 64),
+                crate::rle::make_rle_block(64, 64),
+            ];
+            let mut block_masks = vec![Vec::<u8>::new(); 2];
+            super::slice_and_rasterize_rle_blocks_v3(
+                &job,
+                &blocks,
+                false,
+                None,
+                |_layer, block_idx, payload| {
+                    if let crate::pipeline::RleBlockPayload::Runs(runs) = payload {
+                        block_masks[block_idx as usize] = expand_rle_to_mask(&runs, 64 * 128);
+                    }
+                    Ok(())
+                },
+                None,
+                None,
+            )
+            .expect("block RLE slice should succeed");
+
+            let mut stitched = vec![0u8; 128 * 128];
+            for y in 0..128usize {
+                stitched[y * 128..y * 128 + 64]
+                    .copy_from_slice(&block_masks[0][y * 64..(y + 1) * 64]);
+                stitched[y * 128 + 64..(y + 1) * 128]
+                    .copy_from_slice(&block_masks[1][y * 64..(y + 1) * 64]);
+            }
+
+            for y in 0..128usize {
+                for x in 0..128usize {
+                    let s = stitched[y * 128 + x];
+                    let f = full_mask[y * 128 + x];
+                    assert_eq!(
+                        s, f,
+                        "mismatch at ({x}, {y}) for aa_level={aa_level}, blur_radius={blur_radius}: stitched={s} vs full={f}"
+                    );
+                }
+            }
+        }
+    }
 }
+
+
