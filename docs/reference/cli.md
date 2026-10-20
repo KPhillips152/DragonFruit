@@ -137,7 +137,16 @@ count. It cannot be combined with the job flags. `scene slice` uses it.
 - `--source-width-px 11400` — raster resolution X
 - `--source-height-px 6400` — raster resolution Y
 - `--png-compression balanced` — fastest / balanced / smallest / optimal
-- `--anti-aliasing Off` — Off / 2x / 4x / 8x
+- `--anti-aliasing Off` — Off / 2x / 4x / 8x / 16x
+- `--anti-aliasing-mode Coverage` — Coverage / 2DAA / 3DAA
+- `--support-halo` / `--no-support-halo` — enable or disable Support Halo (calibrated default: Auto ON, `0.15 mm` radius, `100%` inverse scaling, `25%` max intensity, `donut` profile, `tips_only` scope, `0.80 mm` max tip diameter)
+- `--support-halo-auto` / `--no-support-halo-auto` — enable or disable Support Halo Auto mode
+- `--support-halo-radius-mm 0.15` — Support Halo Euclidean radial distance (mm)
+- `--support-halo-inverse-scale-percent 100` — Support Halo tip inverse scaling (0–100%)
+- `--support-halo-max-intensity 25` (alias `--support-halo-intensity`) — Support Halo max peak grayscale intensity (1–100%)
+- `--support-halo-profile donut` — `donut` / `uniform` / `linear` / `gaussian`
+- `--support-halo-scope tips_only` — `tips_only` / `whole_supports`
+- `--support-halo-max-tip-diameter 0.80` — max tip diameter (mm) receiving Support Halo in `tips_only` scope
 - `--mirror-x`, `--mirror-y` — mirror axes
 - `--metadata-json '{}'` — opaque metadata passthrough
 
@@ -192,7 +201,7 @@ and prints `[command] Xms` to stderr.
 | `scene transform-model <voxl> --id <id> [--position x,y,z] [--rotate x,y,z] [--scale x,y,z]` | Set transform | VOXL mutation |
 | `scene duplicate <voxl> --id <id> [--count N] [--offset x,y,z]` | Duplicate model | VOXL mutation |
 | `scene arrange <voxl> --mesh-dir <dir> [--spacing 2] [--build-width-mm 218] [--build-depth-mm 122] [--anchor center]` | Auto-arrange on plate | `highPrecisionArrange` (SAT nesting) |
-| `scene slice <voxl> --o <out> --mesh-dir <dir> [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
+| `scene slice <voxl> --o <out> [--mesh-dir <dir>] [--plate <id or n>] [--printer <profile.json>] [--material <material.json>] [--aa-preset P] [--aa-settings <aa.json>] [--support-halo] [--no-support-halo] [--support-halo-*] [--lut-curves <curves.json>]` | Merge + slice via Rust, with the job the app would build | Loads STLs → applies transforms → `assembleSliceJob` → `dragonfruit-cli slice run` |
 | `scene load <voxl> [--json]` | Dump full scene | `voxl/codec::parseVoxlAuto` |
 
 **`scene slice` builds the same job as the app.** With `--printer` (an official
@@ -223,9 +232,13 @@ the job gets what the panel does by default: the `balanced` auto preset and
 whatever the material's own anti-aliasing settings say.
 
 - `--aa-preset sharp|balanced|smooth|raw` picks the auto preset.
+- `--aa-mode Coverage|2DAA|3DAA`, `--aa-level Off|2x|4x|8x|16x`, `--blur-radius-px N`, `--z-blur-radius-layers N`, `--z-blend-lookback N`, and `--aa-on-supports on|off` provide inline anti-aliasing overrides without requiring an external JSON file.
+- `--support-halo` (or `--support-halo on`) enables Support Halo with calibrated defaults (`Auto = true`, `radius = 0.15 mm`, `inverseScale = 100%`, `maxIntensity = 25%`, `profile = donut`, `scope = tips_only`, `maxTipDiameter = 0.80 mm`) completely orthogonally to `--aa-preset` (including `--aa-preset raw`).
+- `--no-support-halo` (or `--support-halo off`) explicitly disables Support Halo even if enabled in the material profile or `--aa-settings`.
+- `--support-halo-auto` / `--no-support-halo-auto` toggles Support Halo Auto vs. Custom mode, and granular flags (`--support-halo-radius-mm`, `--support-halo-inverse-scale`, `--support-halo-intensity` / `--support-halo-max-intensity`, `--support-halo-profile`, `--support-halo-scope`, `--support-halo-max-tip-diameter`) implicitly enable Support Halo in Custom mode.
 - `--aa-settings <aa.json>` applies anti-aliasing settings on top of the
   material's, as the panel's session override does. The file has the shape a
-  material stores them in; `enableOverride` is implied:
+  material stores them in; `enableOverride` is implied when overriding AA mode/level/blur:
 
   ```json
   {
