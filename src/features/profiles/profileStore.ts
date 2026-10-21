@@ -18,6 +18,7 @@ import {
     normalizeWebcamRotationDeg,
     DEFAULT_WEBCAM_ROTATION_DEG,
 } from '@/features/profiles/outputFormatUtils';
+import { isExperimentEnabled } from '@/features/experiments/experimentsRegistry';
 import { hasWindow } from '@/utils/dom';
 
 export type PrinterOutputFormat = string;
@@ -1553,7 +1554,24 @@ export function hydrateProfilesFromStorage(): void {
             return;
         }
 
-        state = sanitizeState(parsed);
+        const sanitized = sanitizeState(parsed);
+        const supportHaloExperimentOn = isExperimentEnabled('support-halo');
+        state = supportHaloExperimentOn
+            ? sanitized
+            : {
+                ...sanitized,
+                materialProfiles: sanitized.materialProfiles.map((profile) => (
+                    profile.antiAliasingSettings.supportHaloEnabled
+                        ? {
+                            ...profile,
+                            antiAliasingSettings: {
+                                ...profile.antiAliasingSettings,
+                                supportHaloEnabled: false,
+                            },
+                        }
+                        : profile
+                )),
+            };
         persist(state);
         notify();
     } catch (error) {
@@ -2311,6 +2329,72 @@ export function updateMaterialProfile(id: string, updates: Partial<Omit<Material
         ...state,
         materialProfiles,
     }));
+}
+
+/**
+ * Synchronizes Support Contact Halo settings across all material profiles
+ * (including official template and user-locked profiles) and any persisted
+ * slicing session AA overrides when the `support-halo` experiment master
+ * toggle is turned On or Off in Settings -> Experiments.
+ */
+export function applySupportHaloExperimentState(enabled: boolean): void {
+    ensureHydrated();
+    const haloPatch: Partial<MaterialAntiAliasingSettings> = enabled
+        ? {
+            supportHaloEnabled: true,
+            supportHaloAuto: true,
+            ...getAutoSupportHaloResetPatch(),
+        }
+        : {
+            supportHaloEnabled: false,
+        };
+
+    const materialProfiles = state.materialProfiles.map((profile) => ({
+        ...profile,
+        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings({
+            ...(profile.antiAliasingSettings ?? DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS),
+            ...haloPatch,
+        }),
+    }));
+
+    setState(ensureActiveMaterialForActivePrinter({
+        ...state,
+        materialProfiles,
+    }));
+
+    if (hasWindow()) {
+        const sessionOverrideKey = 'dragonfruit.slicing.sessionAaOverrideByMaterial.v1';
+        for (const storage of [window.sessionStorage, window.localStorage]) {
+            try {
+                const raw = storage?.getItem?.(sessionOverrideKey);
+                if (!raw) continue;
+                const parsed = JSON.parse(raw);
+                if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+                const next: Record<string, unknown> = {};
+                for (const [materialId, entry] of Object.entries(parsed as Record<string, unknown>)) {
+                    if (!entry || typeof entry !== 'object') {
+                        next[materialId] = entry;
+                        continue;
+                    }
+                    const record = entry as Record<string, unknown>;
+                    const prevAa = (record.antiAliasingSettings && typeof record.antiAliasingSettings === 'object')
+                        ? record.antiAliasingSettings as Record<string, unknown>
+                        : {};
+                    next[materialId] = {
+                        ...record,
+                        antiAliasingSettings: sanitizeMaterialAntiAliasingSettings({
+                            ...DEFAULT_MATERIAL_ANTI_ALIASING_SETTINGS,
+                            ...prevAa,
+                            ...haloPatch,
+                        }),
+                    };
+                }
+                storage.setItem(sessionOverrideKey, JSON.stringify(next));
+            } catch {
+                // ignore storage errors
+            }
+        }
+    }
 }
 
 /**

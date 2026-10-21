@@ -17,6 +17,8 @@ import {
     type NativeSlicerRuntimeMetrics,
 } from './tauri/nativeSlicerBridge';
 import { invoke } from '@tauri-apps/api/core';
+import { isExperimentEnabled } from '@/features/experiments/experimentsRegistry';
+import { hasWindow } from '@/utils/dom';
 import { assembleSliceJob, buildNativeSliceJob, resolveSliceRasterSettings } from './sliceJobAssembly';
 import { resolveSliceJobAntiAliasing, type SliceJobAntiAliasingRequest } from './sliceAntiAliasing';
 
@@ -558,7 +560,7 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
 
     const perfSettings = getSavedSlicingPerformanceSettings();
 
-    const assembled = assembleSliceJob({
+    const rawAssembled = assembleSliceJob({
         printerProfile: options.printerProfile,
         materialProfile: options.materialProfile,
         scene: {
@@ -569,6 +571,15 @@ export async function runSliceExportOrchestrator(options: SliceExportOrchestrato
         dither: options,
         antiAliasing: options.antiAliasing,
     });
+    const assembled = hasWindow() && !isExperimentEnabled('support-halo')
+        ? {
+            ...rawAssembled,
+            antiAliasing: {
+                ...rawAssembled.antiAliasing,
+                supportHaloEnabled: false,
+            },
+        }
+        : rawAssembled;
 
     const nativeJob = {
         ...buildNativeSliceJob(assembled, {
