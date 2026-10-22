@@ -74,7 +74,7 @@ These came out of the mapping and are not in the ADR or the kickoff brief.
 5. **The save path is four savers, not one.** Autosave, Ctrl+S, the export panel and the CLI
    build the writer's input separately and disagree: Ctrl+S saves only visible models, the export
    panel leaves out the printer and the ordering, per-plate exports keep plate-N positions. A
-   shared `buildVoxlSaveInput` is ADR rule 6 at its source.
+   shared buildVoxlSaveInput (proposed) is ADR rule 6 at its source.
 6. **THREE is already inside the "pure" helpers.** `selectionTransform.ts`,
    `selectionLiftDrop.ts`, `selectionPosition.ts` and `highPrecisionArrange` (the ADR's own success
    example) import THREE maths classes. The ADR says "no THREE". This needs a ruling (D1) before the
