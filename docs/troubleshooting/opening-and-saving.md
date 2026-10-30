@@ -1,132 +1,133 @@
 # Troubleshooting: Opening and saving
 
-This page covers problems importing model files (STL, OBJ, 3MF), importing Lychee `.lys` and ChiTuBox `.chitubox` / `.ctp` scenes, opening and saving `.voxl` scenes, and autosave and crash recovery. Search the page for the words you see on screen.
+Problems getting models and scenes in and out of DragonFruit: importing STL, OBJ and 3MF files, Lychee and ChiTuBox scenes, opening and saving `.voxl` scenes, and autosave. Find the message you're seeing; the fix comes first, and **More detail** has the rest.
 
-!!! note "ChiTuBox import is off by default"
-    DragonFruit only opens `.chitubox` and `.ctp` files after you turn on **Settings** > **Experiments** > **Chitubox File Import**. The change applies after you restart DragonFruit or reload the window.
+!!! note "ChiTuBox files need an experiment turned on"
+    DragonFruit only opens `.chitubox` and `.ctp` files after you turn on **Chitubox File Import** in **Settings** > **Experiments**, click **Apply**, then **Reload Now**. Save your scene first: reloading discards unsaved changes.
 
-If a fix below says to report the problem, follow [Reporting a problem](common-issues.md#reporting-a-problem): it lists what to include and where to find the log file.
+<details>
+<summary>Show me how (30-second video)</summary>
 
-## Dropping and picking files
+<video src="../assets/troubleshooting/enable-chitubox-import.mp4" controls muted playsinline preload="metadata" width="100%"></video>
+
+![The Experiments tab in Settings, with Chitubox File Import switched off](../assets/troubleshooting/settings-experiments-chitubox.png)
+
+</details>
+
+## Opening files
 
 ### "Unsupported file format"
 
 <!-- source: src/app/page.tsx -->
 
-**When it appears:** You drag a file over the editor in **Prepare** mode. The empty start screen shows the same thing as "Unsupported file type" and "Unsupported format detected.", followed by the list of formats.
+DragonFruit doesn't recognise the file's extension. Re-export the model as STL, OBJ or 3MF. For a `.zip`, don't drag it in: open it with **Import mesh…** instead.
 
-**Why:** None of the files you are dragging have an extension DragonFruit accepts. The accepted extensions are STL, OBJ and 3MF for models, plus the scene formats: VOXL, LYS and, only when the ChiTuBox experiment is on, CHITUBOX and CTP. The check uses the file extension only.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+![The Unsupported file format message shown while dragging a file over the editor](../assets/troubleshooting/drop-unsupported-format.png)
 
-1. Check the file extension. A model exported as something else (for example `.step` or `.blend`) has to be exported again as STL, OBJ or 3MF from the program that made it.
-2. For a `.chitubox` or `.ctp` file, turn on **Settings** > **Experiments** > **Chitubox File Import**, then restart DragonFruit.
-3. If the file is a `.zip`, you can't drop it. Open it with **Import mesh…** or **Import scene…** in the DragonFruit app menu (top bar), or with **Load Mesh** on the start screen. DragonFruit lists the models and scenes inside so you can pick them.
+You'll see this while dragging a file over the editor in **Prepare** mode. The start screen says the same thing as "Unsupported file type" or "Unsupported format detected."
 
-### Nothing happens after importing a model or a ZIP
+DragonFruit only checks the extension. It accepts STL, OBJ and 3MF models, and VOXL and LYS scenes (plus CHITUBOX and CTP if the experiment above is on). Files like `.step` or `.blend` need exporting again from the program that made them.
+
+A `.zip` can't be dropped, but **Import mesh…** or **Import scene…** in the app menu, or **Load Mesh** on the start screen, will open it and list the models and scenes inside.
+
+</details>
+
+### Nothing happens after importing a model
 
 <!-- source: src/features/scene/useSceneCollectionManager.ts -->
 
-**When it appears:** You import an STL, OBJ or 3MF (or a `.zip` of them). The loading overlay closes and no model appears. No error message is shown.
+The file didn't load, and DragonFruit doesn't say why. Check the file opens in another program, then export it again as a binary STL and import that.
 
-**Why:**
+<details>
+<summary>More detail</summary>
 
-- When a model file fails to load, DragonFruit doesn't show the reason, and doesn't write it to the log file either. Typical reasons are an empty file, a 3MF with no mesh inside, or a file the mesh loader can't read.
-- A `.zip` that can't be read, or that has no STL, OBJ, 3MF or scene file inside, is skipped without a message.
-- If you clicked to cancel the import in the mesh repair prompt, nothing is added. This is expected.
+The loading overlay closes and no model appears. Typical causes are an empty file, a 3MF with no mesh inside, or a file the loader can't read. A `.zip` that can't be read, or has nothing usable inside, is skipped the same way. (If you cancelled at the mesh repair prompt, nothing is added; that's expected.)
 
-**What to do:**
+The reason isn't shown on screen or written to the log file. If the file opens elsewhere but not in DragonFruit, [report it](common-issues.md#reporting-a-problem) with the file name and type, your steps, and the model if you can share it.
 
-1. Open the file in another program (for example your mesh editor) to check that it really holds geometry.
-2. Export it again from the program that made it, as a binary STL, and import that.
-3. If the file opens elsewhere but not in DragonFruit, report it. Give the file name and type and the exact steps you took, and attach the model if you can. The log file won't contain the reason.
+</details>
 
 ### "Could not reopen this file from cache."
 
 <!-- source: src/components/layout/EmptySceneState.tsx -->
 
-**When it appears:** You click an entry under **Recent files** on the start screen.
+The recent file has moved, or DragonFruit's stored copy is gone. Open it again from where it is now with **Load Mesh** or **Import Scene**; that also fixes the recent entry.
 
-**Why:**
+<details>
+<summary>More detail</summary>
 
-- An OBJ or 3MF is no longer where it was opened from (moved, renamed, deleted, or on a drive that isn't connected).
-- DragonFruit keeps its own copy of some recent files in the app's storage, and that copy is missing or empty. This happens for older entries and after the app's storage is cleared.
+This appears when you click an entry under **Recent files** on the start screen. Either the OBJ or 3MF was moved, renamed, deleted or is on a disconnected drive, or the copy DragonFruit keeps in its own storage is missing (common for older entries, or after the app's storage is cleared).
 
-**What to do:**
+**Clear** next to **Recent files** empties the whole list, not just the broken entry.
 
-1. Open the file again from its current location with **Load Mesh** or **Import Scene**. This also fixes the recent entry.
-2. To remove broken entries, click **Clear** next to **Recent files**. This empties the whole list, not just the broken entry.
+Other quirks of the recent list:
 
-!!! note "Other ways a recent file can misbehave"
-    - A moved or deleted STL gives no message: the click just loads nothing. Open the file from its new location instead.
-    - A recent scene is always reopened from the copy DragonFruit stored when you last opened it, not from the file on disk. If you changed or moved the file since then, open it with **Open scene…** instead.
-    - DragonFruit keeps up to 10 recent files, but the start screen shows only 8 of them.
+- A moved STL gives no message at all; the click just loads nothing.
+- A recent scene reopens from the copy stored when you last opened it, not from the file on disk. If you've changed or moved it since, use **Open scene…**.
+- DragonFruit keeps 10 recent files but shows 8.
 
-## Importing Lychee and ChiTuBox scenes
+</details>
+
+## Lychee and ChiTuBox scenes
 
 ### "… is Experimental"
 
 <!-- source: src/components/organisms/modals/SceneFileModals.tsx -->
 
-**When it appears:** You open a `.lys`, `.chitubox` or `.ctp` file. The title reads "LYS Import is Experimental", "Chitubox Import is Experimental" or "Chitubox Pro Import is Experimental" (or "Plugin Import is Experimental"), with the subtitle "This feature is still under development."
+Just a warning. Click **Continue**, then check the supports before you slice; they may not match the original scene exactly.
 
-For `.chitubox` and `.ctp` files, this only appears after you turn on **Settings** > **Experiments** > **Chitubox File Import**. Until then DragonFruit doesn't accept those files (see "Unsupported file format").
+<details>
+<summary>More detail</summary>
 
-**Why:** This is a warning, not an error. These formats are converted into DragonFruit's own format, so support placement may differ from the original scene. For `.chitubox` files, the plate position and orientation are not recovered.
+![The LYS Import is Experimental dialog with Cancel and Continue buttons](../assets/troubleshooting/lys-import-experimental.png)
 
-**What to do:**
+The title reads "LYS Import is Experimental", "Chitubox Import is Experimental", "Chitubox Pro Import is Experimental" or "Plugin Import is Experimental", with "This feature is still under development." underneath.
 
-1. Click **Continue** to import, or **Cancel** to stop.
-2. Tick **Do not remind again** to stop seeing this warning for that format.
-3. After import, check the supports before slicing.
+These formats are converted into DragonFruit's own, so support placement can differ. For `.chitubox` files the plate position and orientation aren't recovered. Tick **Do not remind again** to stop seeing the warning for that format.
+
+</details>
 
 ### "Scene import failed: …"
 
 <!-- source: src/features/scene/sceneImportMessages.ts -->
 
-**When it appears:** A `.lys`, `.chitubox` or `.ctp` file fails to import. A pop-up with "Scene import failed:" and the same reason also appears.
+The file is damaged, incomplete, or not the kind of file its extension says. Copy or download it again and retry. If it still fails, open it in the slicer that made it and save it again there.
 
-**Why:** The text after the colon comes from the importer. The common ones:
+<details>
+<summary>More detail</summary>
 
-- "LYS manifest JSON header not found" or "Unsupported .lys container variant (ZIP-like). Manifest JSON header not found.": the file is not a `.lys` layout this importer knows, or it is not a Lychee scene at all.
-- "scene.bin is truncated: … The file is incomplete.", "Geometry file too short": the file was cut off, often by an unfinished download or copy.
-- "LysParser: No geometry .bin file found", "LysParser: No parseable geometry .bin payloads found", "LYS import: no object to convert": the scene has no model the importer could read.
-- "Failed to decode scene data: …" or "Failed to parse LYS manifest: …": the scene data inside the file could not be read.
-- "Not a .chitubox file (magic 0x…).", "Not a .ctp file (too short).", "Not a .ctp file (magic 0x…).", "Invalid .ctp object table.": the file doesn't start the way a ChiTuBox project should. It may be damaged, or be a different file type renamed.
-- "No readable geometry in .ctp container.": the `.ctp` file has no model the importer could read.
+![A Scene import failed message at the bottom of the window](../assets/troubleshooting/scene-import-failed.png)
 
-**What to do:**
+This covers `.lys`, `.chitubox` and `.ctp` files. A pop-up with the same reason appears too. The text after the colon tells you which case you're in:
 
-1. Copy the file again from where it came from, and make sure the download or copy finished. Then import it again.
-2. Open the file in the slicer that made it. If it opens, save it again there, or export the models as STL and import those instead (you lose the supports).
-3. If the file opens in its own slicer but not in DragonFruit, report it with the exact message and, if you can, the file.
+| Message contains | What it means |
+| --- | --- |
+| "LYS manifest JSON header not found", "Unsupported .lys container variant" | Not a `.lys` layout the importer knows, or not a Lychee scene at all |
+| "scene.bin is truncated", "Geometry file too short" | The file was cut off, often by an unfinished download or copy |
+| "No geometry .bin file found", "No parseable geometry .bin payloads found", "no object to convert" | The scene has no model the importer could read |
+| "Failed to decode scene data", "Failed to parse LYS manifest" | The scene data inside couldn't be read |
+| "Not a .chitubox file", "Not a .ctp file", "Invalid .ctp object table" | The file doesn't start like a ChiTuBox project; damaged, or a renamed file |
+| "No readable geometry in .ctp container" | The `.ctp` has no model the importer could read |
 
-### "Imported … scene files (… failed)." / "Scene import failed for all … files."
+As a last resort, export the models as STL from the original slicer and import those; you'll lose the supports. If the file opens fine in its own slicer but not here, [report it](common-issues.md#reporting-a-problem) with the message and the file.
+
+</details>
+
+### "Imported … scene files (… failed)."
 
 <!-- source: src/features/scene/sceneImportMessages.ts -->
 
-**When it appears:** You import several scene files at once and some or all of them fail.
+Some files in a batch failed. Import the failed ones one at a time to see each file's own message, then look that up on this page.
 
-**Why:** Each failed file failed for one of the reasons on this page. When you import several files at once, the reason for each file is not shown.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+When every file fails, the message is "Scene import failed for all … files." A batch import doesn't show the reason for each file, which is why importing them one by one helps.
 
-1. Import the failed files one at a time to see each file's own message.
-2. Look that message up on this page.
-
-### "No registered scene import handler for …" / "Unsupported scene file: …"
-
-<!-- source: src/features/scene/useSceneCollectionManager.ts -->
-
-**When it appears:** DragonFruit is asked to import a scene file type it has no importer for.
-
-**Why:** The scene importers are built into DragonFruit, so this shouldn't happen in a normal build. The code doesn't show a common user cause.
-
-**What to do:**
-
-1. Check that the file has the right extension (`.voxl`, `.lys`, `.chitubox` or `.ctp`).
-2. Update DragonFruit. On Windows and macOS, use **Settings** > **Updates** > **Check for Updates**. On Linux, that tab shows "Managed by Flatpak", so update through Flatpak (your software center, or flatpak update).
-3. If it still happens, report it with the exact message and what you were opening.
+</details>
 
 ## Opening `.voxl` scenes
 
@@ -134,95 +135,102 @@ For `.chitubox` and `.ctp` files, this only appears after you turn on **Settings
 
 <!-- source: src/components/modals/ObsoleteVoxlVersionModal.tsx -->
 
-**When it appears:** You open a `.voxl` scene. The dialog's subtitle is "Saved by an obsolete DragonFruit version", and the message says the file "was saved in the VOXL V1 format, which this version no longer reads." The toast "Could not open …: unsupported VOXL version." appears with it.
+The scene was saved by an early pre-release DragonFruit in the old VOXL V1 format. Open it in an older build that still reads it, save it again, then open the new file here.
 
-**Why:** The scene uses the old VOXL V1 format (JSON or an early binary container). Only pre-release builds of DragonFruit wrote that format. This version refuses those files instead of loading them halfway.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+![The Can't open this scene dialog for a VOXL V1 file](../assets/troubleshooting/voxl-obsolete-version.png)
 
-1. Open the scene in an older DragonFruit build that still reads it, and save it again.
-2. Open the re-saved file here.
+The dialog's subtitle is "Saved by an obsolete DragonFruit version", and a "Could not open …: unsupported VOXL version." toast appears with it. Current versions refuse V1 files rather than load them halfway.
+
+</details>
 
 ### "VOXL import failed: …"
 
 <!-- source: src/features/scene/sceneImportMessages.ts -->
 
-**When it appears:** A `.voxl` scene fails to open. A pop-up with "Scene import failed:" and the same reason also appears.
+Either the scene came from a newer DragonFruit (update yours) or the file is damaged (copy it again, and let any cloud sync finish first).
 
-**Why:** The text after the colon says what was wrong:
+<details>
+<summary>More detail</summary>
 
-- "Unsupported VOXL binary version: … Expected 2 or 3.": the scene was saved by a newer DragonFruit than the one you are running.
-- "Not a VOXL file: the VOXL binary header is missing.": the file is not a DragonFruit scene. It may be another file renamed to `.voxl`, or it is empty.
-- "Invalid VOXL V2 file: too small.", "Invalid VOXL V2 file: truncated directory.", "VOXL V2: chunk … extends beyond file boundary.", "VOXL V2: chunk … size mismatch after decompression …": the file is cut off or damaged, often by an unfinished copy, download or cloud sync.
-- "VOXL V2: missing META chunk." or "VOXL V2: missing SUPP chunk.": parts of the scene are missing from the file.
+![A VOXL import failed message at the bottom of the window](../assets/troubleshooting/voxl-import-failed.png)
 
-**What to do:**
+A "Scene import failed:" pop-up with the same reason appears too.
 
-1. For a newer-version error, update DragonFruit. On Windows and macOS, use **Settings** > **Updates** > **Check for Updates**. On Linux, that tab shows "Managed by Flatpak", so update through Flatpak (your software center, or flatpak update).
-2. For a damaged file, copy it again from where it came from (backup, cloud, the other computer), and wait for any sync to finish.
-3. Look next to the scene file for a recovery copy named like *name*_autosave.voxl. If there is one, try opening it.
-4. If a file that should be fine still fails, report it with the exact message and, if you can, the file.
+| Message contains | What it means |
+| --- | --- |
+| "Unsupported VOXL binary version … Expected 2 or 3" | Saved by a newer DragonFruit than yours |
+| "Not a VOXL file: the VOXL binary header is missing" | Not a DragonFruit scene; a renamed or empty file |
+| "too small", "truncated directory", "extends beyond file boundary", "size mismatch after decompression" | Cut off or damaged, often by an unfinished copy, download or sync |
+| "missing META chunk", "missing SUPP chunk" | Parts of the scene are missing from the file |
 
-### "Imported VOXL scene: … skipped … models." / "VOXL import finished with no importable meshes."
+To update on Windows and macOS, use **Settings** > **Updates** > **Check for Updates**. On Linux, DragonFruit updates through Flatpak (your software center, or flatpak update).
+
+For a damaged file, also look next to it for a recovery copy named like *name*_autosave.voxl, and try opening that.
+
+</details>
+
+### "Imported VOXL scene: … skipped … models."
 
 <!-- source: src/features/scene/sceneImportMessages.ts -->
 
-**When it appears:** A `.voxl` scene opens, but some models are left out. If all of them are left out, you see "VOXL import finished with no importable meshes." instead.
+The scene opened, but some models couldn't be loaded and were left out. Re-import the missing ones from their original STL, OBJ or 3MF files and save the scene.
 
-**Why:** DragonFruit skips a model it can't load and keeps the rest of the scene. A model is skipped when:
+<details>
+<summary>More detail</summary>
 
-- the scene holds no mesh data for it inside the file, or the mesh data is missing;
-- the mesh fails to load, or fails its integrity check.
+If every model is skipped, the message is "VOXL import finished with no importable meshes." instead.
 
-**What to do:**
+A model is skipped when its mesh data is missing from the file, or fails to load or pass its integrity check. DragonFruit doesn't say which models it skipped, so compare the scene with what you expected. If the file was copied or synced, a fresh copy may fix it.
 
-1. Compare the scene with what you expected to see. DragonFruit doesn't say which models it skipped, and doesn't write their names to the log file.
-2. Import those models again from their original STL, OBJ or 3MF files, and save the scene.
-3. If the file was copied or synced, try a fresh copy, since damaged mesh data also causes this.
+</details>
 
 ## Saving scenes
 
-!!! note "Hidden models are not saved"
-    **Save scene** writes only the models that are visible at the time. Models you have hidden are left out of the `.voxl` file, unless every model is hidden. Show all models before saving if you want to keep them.
+!!! note "Hidden models aren't saved"
+    **Save scene** only writes the models that are visible. Show everything before you save if you want to keep hidden models.
 
 ### "Could not save the scene"
 
 <!-- source: src/app/page.tsx -->
 
-**When it appears:** You use **Save scene** or **Save scene as…** (or Ctrl+S) and the file could not be written. The message under the title is the reason.
+The file couldn't be written. Use **Save scene as…** to save to a local folder you own, like Documents, and check the drive has space.
 
-**Why:**
+<details>
+<summary>More detail</summary>
 
-- If writing to the scene's current location fails, DragonFruit first asks you for a new save location. This message appears when that second try also fails.
-- Common reasons name the file and end with the reason from your system, such as "Failed creating destination directory '…': …", "Failed flushing '…' to disk before commit: …" or "Failed committing '…' over '…' after 3 attempts: …". The usual causes are a folder you can't write to, a full disk, a drive or network share that went away, or another program (antivirus, cloud sync, file preview) holding the file open.
-- "Could not write … to the selected destination." means the write failed without a more specific reason.
+If saving to the current location fails, DragonFruit asks you for a new location first; this message means that second try failed too. Your previous file is safe: scenes are written to a temporary file and only then swapped in.
 
-**What to do:**
+The message under the title names the file and your system's reason, for example "Failed creating destination directory", "Failed flushing … to disk before commit" or "Failed committing … after 3 attempts". The usual causes:
 
-1. Save to a local folder you own, such as your Documents folder, with **Save scene as…**.
-2. Check that the drive has free space and is still connected.
-3. If the file sits in a synced or scanned folder, pause the sync or wait a moment and save again.
+- a folder you can't write to
+- a full disk
+- a drive or network share that went away
+- antivirus, cloud sync or a file preview holding the file open (pause the sync or wait a moment, then save again)
 
-!!! note "Your previous file is kept"
-    The scene is written to a temporary file first and only then moved over the old one. If saving fails, the last good version on disk is left as it was.
+"Could not write … to the selected destination." means it failed without a more specific reason.
+
+</details>
 
 ### "Scene is too large to save"
 
 <!-- source: src/app/page.tsx -->
 
-**When it appears:** You save a scene that is over the 4 GB limit of the `.voxl` format. The box below the message lists up to five of the largest models with their compressed size.
+The scene, or one model in it, is over the `.voxl` format's 4 GB limit. Remove one of the largest models listed, or reduce that model's triangle count in your mesh editor.
 
-**Why:** DragonFruit refuses to save rather than write a broken file. There are two cases, and the message tells you which one you hit:
+<details>
+<summary>More detail</summary>
 
-- "This scene is … compressed and exceeds the VOXL 4 GB limit.": the whole scene is over 4 GB after compression.
-- "“…” is … on its own, which exceeds the VOXL 4 GB limit for a single mesh.": one model is over 4 GB on its own, either compressed or uncompressed. The message names that model and gives its size.
+The box below the message lists up to five of the largest models with their sizes. The message tells you which case you hit:
 
-**What to do:**
+- "This scene is … compressed and exceeds the VOXL 4 GB limit." The whole scene is too big. Remove a large model or split the scene into two.
+- "“…” is … on its own, which exceeds the VOXL 4 GB limit for a single mesh." One model is too big by itself (compressed or not). Splitting the scene won't help; that model has to get smaller, or come out.
 
-1. If the whole scene is too large, remove one of the largest models listed, or move some models into a separate scene. Then save again.
-2. If one model is too large on its own, removing other models or splitting the scene won't help. Reduce that model itself (for example, re-export it from your mesh editor with fewer triangles), or remove it from the scene.
+The message also suggests turning off "Save original model along with decimated". This version has no setting with that name, so use the steps above.
 
-The message also suggests turning off "Save original model along with decimated". This build has no setting with that name, so the steps above are the fix.
+</details>
 
 ## Autosave and crash recovery
 
@@ -230,115 +238,89 @@ The message also suggests turning off "Save original model along with decimated"
 
 <!-- source: src/app/page.tsx -->
 
-**When it appears:** You click **Restore** in the **Unsaved Scene Found** dialog at startup, and the autosaved scene can't be loaded.
+The recovery copy couldn't be loaded, and it's now gone. Open your last saved copy of the scene instead.
 
-**Why:**
+<details>
+<summary>More detail</summary>
 
-- "The autosave recovery file could not be found.": the recovery file was deleted or moved, or it was beside a project folder that is no longer reachable.
-- "The autosaved recovery file is corrupted or unreadable.", with the detail "The scene importer rejected or could not parse the autosave data.": the file was found but could not be opened as a scene, usually because it was only partly written when DragonFruit closed. A "VOXL import failed: …" message with the exact reason usually appears too (see above).
-- Other details, such as "Autosaved VOXL file is empty." or "Failed reading autosaved scene: …", give the reason directly.
+This appears after you click **Restore** in the **Unsaved Scene Found** dialog. The detail says why:
 
-**What to do:**
+| Detail | What it means |
+| --- | --- |
+| "The autosave recovery file could not be found." | It was moved or deleted, or sits beside a project folder that isn't reachable |
+| "The autosaved recovery file is corrupted or unreadable." | Usually only partly written when DragonFruit closed; a "VOXL import failed" message gives the exact reason |
+| "Autosaved VOXL file is empty.", "Failed reading autosaved scene: …" | The reason as stated |
 
-1. Open your last manually saved copy of the scene, if you have one.
-2. If it still happens, report it with the exact message and the detail text.
+By the time you see this, DragonFruit has already deleted the recovery file, so you can't retry. To protect a recovery copy next time, copy the file in your file manager *before* clicking **Restore**. The dialog shows it under **Name** (hover for the full path), and the subtitle says whether it's beside your project or in DragonFruit's app data folder.
 
-!!! note "A failed restore loses the recovery copy"
-    By the time this message appears, DragonFruit has already deleted the autosave file and cleared the recovery state. You can't retry, and the autosave file is not left on disk. To protect a recovery copy the next time, copy the file in your file manager before you click **Restore**. The **Unsaved Scene Found** dialog shows the file under **Name** (hover over it for the full path). The subtitle says where it is: "Recovered from beside your project file" means it sits next to your project, and "Recovered from the app data folder" means it is in the autosave folder inside DragonFruit's app data folder.
+If it keeps happening, [report it](common-issues.md#reporting-a-problem) with the exact message and detail text.
+
+</details>
 
 ### "Autosave is not working"
 
 <!-- source: src/app/page.tsx -->
 
-**When it appears:** While you work, after background autosave has failed twice in a row. The message is the reason. If there is no reason, it is "The background recovery save failed repeatedly." The last line tells you when the last successful autosave happened, or says "No autosave has succeeded this session. Save your project manually."
+Background autosave has failed twice in a row. Save your scene now with **Save scene**, then fix the cause named in the message.
 
-**Why:** The crash-recovery copy could not be written. The reasons are the same as for "Could not save the scene" (folder not writable, disk full, drive gone, file locked), or the scene is over the 4 GB limit (see "Scene is too large to save"). You only see this message once per outage.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+Without a specific reason the message reads "The background recovery save failed repeatedly." The last line tells you when the last successful autosave was, or says none has succeeded this session. You only see this once per outage.
 
-1. Save your scene now with **Save scene**, so your work does not depend on autosave.
-2. Fix the cause named in the message (free space, reconnect the drive, save the project to a local folder).
-3. Check **Settings** > **Scene Autosave**. The current failure is shown there under **Standing Autosave Error** until the next autosave works.
+The causes are the same as for "Could not save the scene" (folder not writable, disk full, drive gone, file locked), or the scene is over the 4 GB limit. The current failure also shows in **Settings** > **Scene Autosave** under **Standing Autosave Error**, and clears by itself once an autosave works; click **Refresh** there to check.
 
-### "Standing Autosave Error"
-
-<!-- source: src/components/settings/SceneAutosaveSettingsTab.tsx -->
-
-**When it appears:** In **Settings** > **Scene Autosave**, under **Autosave Status**.
-
-**Why:** The most recent autosave attempt failed, and the text below the heading is its reason. It clears by itself after the next autosave works.
-
-**What to do:**
-
-1. Follow the steps under "Autosave is not working" above.
-2. Click **Refresh** after making a change to see the current state.
+</details>
 
 ### "Could not write beside the project (…), so the default location is being used."
 
 <!-- source: src/components/settings/SceneAutosaveSettingsTab.tsx -->
 
-**When it appears:** In **Settings** > **Scene Autosave**, under **Autosave scene file**.
+Nothing's broken: autosave still works, it just saves to DragonFruit's app data folder instead of next to your project. To change that, save the project with **Save scene as…** somewhere you can write to.
 
-**Why:** For a saved project, autosave tries to write the recovery copy beside the project file. When it can't, it writes to the app data folder instead. The word in brackets says why:
+<details>
+<summary>More detail</summary>
 
-- "parent-missing": the project's folder no longer exists or isn't reachable.
-- "parent-unwritable": DragonFruit can't create files in the project's folder.
-- "not-a-scene-file": the project isn't a scene file DragonFruit saves to.
-- "no-project": the scene hasn't been saved as a project yet.
+This shows in **Settings** > **Scene Autosave**, under **Autosave scene file**. The word in brackets is the reason:
 
-Autosave still works in all these cases. Only the location changes.
+| Reason | Meaning |
+| --- | --- |
+| parent-missing | The project's folder no longer exists or isn't reachable |
+| parent-unwritable | DragonFruit can't create files in the project's folder |
+| not-a-scene-file | The project isn't a scene file DragonFruit saves to |
+| no-project | The scene hasn't been saved as a project yet |
 
-**What to do:**
+"no-project" can also show when autosave is in fact writing beside your project. Check the path under **Autosave scene file** to see where the copy really is.
 
-1. Nothing is required. The recovery copy is in the folder shown under **Autosave scene file**.
-2. To keep the copy beside your project, save the project with **Save scene as…** to a folder you can write to.
+</details>
 
-!!! note "no-project can show while autosave works normally"
-    When the last autosave did not record a reason, this tab works one out without knowing your project, and that always gives "no-project". Check the path under **Autosave scene file** to see where the copy really is.
+## Support data
 
-### "Failed to load autosave status." / "Failed to mark autosave as clean." / "Failed to open autosave location."
+### "Support import failed."
 
+<!-- source: src/features/scene/sceneImportMessages.ts -->
+
+The file isn't a DragonFruit support export. Pick a support JSON exported from DragonFruit; to bring in a Lychee scene with its supports, use **Import scene…** instead.
+
+<details>
+<summary>More detail</summary>
+
+This appears from **Load Support Data (V2)** in the island scan card. "Support import failed." means the file isn't valid JSON (the picker allows `.lys` files here, but this import can't read them). "Support import failed: unsupported support JSON format." means it's JSON but not a DragonFruit support export.
+
+</details>
+
+## Messages with no known user fix
+
+These come from unexpected errors, and the code doesn't point to a common cause. Try restarting DragonFruit or repeating the step; if the message comes back, [report it](common-issues.md#reporting-a-problem).
+
+<!-- source: src/features/scene/useSceneCollectionManager.ts -->
 <!-- source: src/components/settings/SceneAutosaveSettingsTab.tsx -->
 
-**When it appears:** In **Settings** > **Scene Autosave**: when the tab opens or you click **Refresh**, when you click **Mark Recovery Clean**, or when you click **Open Autosave Location**.
-
-**Why:** DragonFruit could not read, write or open its autosave folder in the app data location. The code shows no single common cause. Possible causes include that folder being read-only or blocked by security software, or (for the last message) the autosave file no longer existing.
-
-**What to do:**
-
-1. Restart DragonFruit and open the tab again.
-2. If it keeps failing, report it with the exact message and which button you clicked.
+| Message | Where you see it | Also include in your report |
+| --- | --- | --- |
+| "No registered scene import handler for …", "Unsupported scene file: …" | Opening a scene | What you were opening (check the extension is `.voxl`, `.lys`, `.chitubox` or `.ctp`, and update DragonFruit first) |
+| "Failed to load autosave status.", "Failed to mark autosave as clean.", "Failed to open autosave location." | **Settings** > **Scene Autosave** | Which button you clicked |
+| "Failed to split supports", "Failed to merge supports", "Scan failed: …" | Right-click a model > **Supports** | The steps you took, and the model if you can share it |
 
 !!! note "Mark Recovery Clean deletes the autosave file"
-    **Mark Recovery Clean** doesn't only clear the recovery flag. It also deletes the autosave file itself, so only use it when you are sure you don't need that copy.
-
-## Support data and support splitting
-
-### "Support import failed." / "Support import failed: unsupported support JSON format."
-
-<!-- source: src/features/scene/sceneImportMessages.ts -->
-
-**When it appears:** You use **Load Support Data (V2)** in the island scan card and pick a file.
-
-**Why:**
-
-- "Support import failed.": the file isn't valid JSON. This includes picking a `.lys` file here, which the file picker allows but this import can't read.
-- "… unsupported support JSON format.": the file is JSON but isn't a DragonFruit support export.
-
-**What to do:**
-
-1. Pick a support JSON exported from DragonFruit.
-2. To bring in a Lychee scene with its supports, open the `.lys` with **Import scene…** instead.
-
-### "Failed to split supports" / "Failed to merge supports" / "Scan failed: …"
-
-<!-- source: src/features/scene/sceneImportMessages.ts -->
-
-**When it appears:** You right-click a model and use **Supports** > **Split supports**, **Merge supports** or **Scan for Supports**.
-
-**Why:** An unexpected error happened while splitting, merging or scanning the mesh. The code shows no common cause. For a scan, the text after "Scan failed:" is the reason.
-
-**What to do:**
-
-1. Undo, then try the command again.
-2. If it keeps failing, report it with the exact message, the steps you took and, if you can, the model.
+    **Mark Recovery Clean** in **Settings** > **Scene Autosave** clears the recovery flag *and* deletes the autosave file, so only use it when you're sure you don't need that copy.
