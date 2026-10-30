@@ -1,39 +1,53 @@
 # Troubleshooting: Mesh repair and hollowing
 
-This page covers the warnings and errors you can see when DragonFruit checks a mesh on import, repairs it, hollows it, or punches drain holes into it. Search the page for the words you see on screen.
+Warnings and errors you can see when DragonFruit checks a mesh on import, repairs it, hollows it, or punches drain holes into it. Find the message you're seeing; the fix comes first, and **More detail** has the rest.
 
 ## Mesh checks on import
+
+!!! note "Very large meshes are not checked"
+    When automatic repair is on, meshes with 3 million triangles or more skip it on import, so they are not checked or repaired. Run **Auto-Repair** by hand on these.
 
 ### "Mesh Issue detected"
 
 <!-- source: src/components/modals/ManifoldWarningModal.tsx -->
 
-**When it appears:** right after you import a model, with the subtitle "This mesh isn't a valid solid". The dialog says that the red-striped areas in the viewport mark the parts that failed validation. You see this dialog once per import, even if several models in the batch are flagged.
+Your model isn't a closed solid, which can cause slicing and support problems. Click **Repair Now**, or **Dismiss** and repair it later from the right-click menu.
 
-**Why:** the mesh is not a closed solid. Edges are left open, faces cross through each other, or surfaces do not quite meet. Slicing and support placement expect a sealed solid, so these defects can reach the print.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+The dialog appears right after you import a model, with the subtitle "This mesh isn't a valid solid". The red-striped areas in the viewport mark the parts that failed validation. You see the dialog once per import, even if several models in the batch are flagged.
 
-1. Click **Repair Now** to start repairing straight away. It repairs one model: the first flagged model in the scene, which may be a model from an earlier import rather than the one you just added. To repair the others, see the next step.
-2. Or click **Dismiss** and keep working. You can repair later: right-click the model and choose **Repair** > **Auto-Repair**, then click **Repair** in the **Repair Mesh** dialog that opens. If several models are selected, they are all repaired one after another.
-3. If the red stripes are still there after repairing, see "Repair Incomplete" below.
+The mesh has open edges, faces that cross through each other, or surfaces that don't quite meet. Slicing and support placement expect a sealed solid, so these defects can reach the print.
 
-!!! note "Very large meshes are not checked"
-    When automatic repair is on, meshes with 3 million triangles or more skip it on import, so they are not checked or repaired. Run **Auto-Repair** by hand on these.
+**Repair Now** repairs one model only: the first flagged model in the scene, which may be a model from an earlier import rather than the one you just added. To repair the others, or to repair after clicking **Dismiss**, right-click the model and choose **Repair** > **Auto-Repair**, then click **Repair** in the **Repair Mesh** dialog that opens. If several models are selected, they are all repaired one after another.
+
+If the red stripes are still there afterwards, see "Repair Incomplete" below.
+
+</details>
 
 ### "Repair recommended before slicing"
 
 <!-- source: src/components/scene/MeshRepairConfirmModal.tsx -->
 
-**When it appears:** during import of a mesh file, before the model is loaded, when **Auto-Repair** is on in **Settings** > **General**. The subtitle reads "This model has severe mesh issues and is likely to need heavy repair." The dialog shows the triangle, component, non-manifold edge and boundary loop counts, plus a disclaimer: "Repair is recommended. Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed."
+The file has serious mesh defects, so DragonFruit asks before repairing it. Click **Repair** in most cases, or **Repair parts separately** if the file holds several objects on one plate.
 
-**Why:** a quick check found non-manifold edges (edges shared by more than two faces), open holes (boundary loops), faces pointing the wrong way, or 256 or more separate pieces. A repair of a file like this can take a while, so DragonFruit asks first.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+This appears while a mesh file is importing, before the model is loaded, when **Auto-Repair** is on in **Settings** > **General**. The subtitle reads "This model has severe mesh issues and is likely to need heavy repair." The dialog shows the triangle, component, non-manifold edge and boundary loop counts, plus a disclaimer: "Repair is recommended. Loading this mesh as-is may cause slicing errors or print failures, and successful output cannot be guaranteed."
 
-1. Click **Repair** to repair the whole file as one model. This is the usual choice.
-2. If the file holds several objects on one plate, click **Repair parts separately**. This button is shown only when the file has two or more separate shells and was opened from a file on disk (not, for example, from inside a zip archive or dropped into the browser version). Each object is repaired and reported on its own, and the ones that are fine stay as they are.
-3. Click **Load As-Is** only if you plan to fix the file elsewhere, or you know the defects do not matter. Closing the dialog cancels the import of this model.
+A quick check found non-manifold edges (edges shared by more than two faces), open holes (boundary loops), faces pointing the wrong way, or 256 or more separate pieces. Repairing a file like this can take a while, which is why you're asked first.
+
+Your choices:
+
+- **Repair** repairs the whole file as one model.
+- **Repair parts separately** repairs and reports on each object on its own; the ones that are fine stay as they are. It's only offered when the file has two or more separate shells and was opened from a file on disk (not, for example, from inside a zip archive or dropped into the browser version).
+- **Load As-Is** is for when you plan to fix the file elsewhere, or know the defects don't matter.
+
+Closing the dialog cancels the import of this model.
+
+</details>
 
 !!! note "Turning automatic repair off"
     Automatic repair on import is set in **Settings** > **General** with **Auto-Repair** (for mesh files) and **Auto-Repair Scenes** (for scene files).
@@ -44,55 +58,45 @@ This page covers the warnings and errors you can see when DragonFruit checks a m
 
 <!-- source: src/components/scene/MeshRepairReportModal.tsx -->
 
-**When it appears:** after a repair, as the title of the repair report. The text reads "DragonFruit could not fully repair this mesh — it is still not a valid manifold and may cause problems later in your workflow."
+The repair fixed what it could, but the mesh still has defects. Right-click the model and repair it again; if that doesn't clear it, fix the file in Blender or Netfabb and import it again.
 
-**Why:** the repair fixed what it could (the report lists it under **What DragonFruit repaired**, for example "Cleaned up 12 non-manifold edges." or "Reduced disconnected mesh sections from 40 to 3."), but the mesh still has defects. The leftover problems are listed in the report's follow-up notes.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+This is the title of the repair report. The text reads "DragonFruit could not fully repair this mesh — it is still not a valid manifold and may cause problems later in your workflow." What was fixed is listed under **What DragonFruit repaired** (for example "Cleaned up 12 non-manifold edges." or "Reduced disconnected mesh sections from 40 to 3."), and the leftover problems are in the report's follow-up notes, so read those first.
 
-1. Read the follow-up notes in the report to see what is left.
-2. Right-click the model and choose **Repair**. If you repaired the model from this menu earlier, choose **Repair Again**; after the automatic repair on import, the menu shows only **Auto-Repair**. A second pass sometimes resolves more.
-3. If the file holds several objects, delete the model and import it again. When **Auto-Repair** is on in **Settings** > **General** and the file has the severe issues that trigger the "Repair recommended before slicing" dialog, pick **Repair parts separately** there.
-4. If it still fails, fix the file in a 3D modeling program such as Blender or Netfabb, then import it again.
-5. To go back to the model as it was imported, right-click it and choose **Repair** > **Undo Repairs**. This item (and **Show Report**) appears only after you have repaired the model from this menu, not after the automatic repair on import.
+For a second pass, right-click the model and choose **Repair**. If you repaired the model from this menu earlier, choose **Repair Again**; after the automatic repair on import, the menu shows only **Auto-Repair**. A second pass sometimes resolves more.
 
-When you report a problem, click **Copy JSON** in the report and paste it into the issue.
+If the file holds several objects, delete the model and import it again. When **Auto-Repair** is on in **Settings** > **General** and the file has the severe issues that trigger the "Repair recommended before slicing" dialog, pick **Repair parts separately** there.
 
-### "Repair failed: …"
+To go back to the model as it was imported, right-click it and choose **Repair** > **Undo Repairs**. This item (and **Show Report**) appears only after you have repaired the model from this menu, not after the automatic repair on import.
 
-<!-- source: src/features/scene/meshRepairMessages.ts -->
+If you [report it](common-issues.md#reporting-a-problem), click **Copy JSON** in the report and paste it into the issue.
 
-**When it appears:** as an error toast after **Auto-Repair** or **Repair Again**. When several models are repaired at once, it reads "Repair failed for (model name): …" and the other models are still repaired.
-
-**Why:** the repair stopped with an error, and the model was left unchanged. The text after the colon is the internal reason. The code does not point to one common cause.
-
-**What to do:**
-
-1. Try the repair again.
-2. Restart DragonFruit and try once more.
-3. If it keeps failing, report it (see "Reporting a problem" at the end of this page) with the full message text.
-
-If you clicked **Stop** during a repair, you see "Repair cancelled. The model is unchanged." instead. That is not an error.
+</details>
 
 ### "Could not restore the model."
 
 <!-- source: src/features/scene/useSceneCollectionManager.ts -->
 
-**When it appears:** after you choose **Repair** > **Undo Repairs**, which the menu offers only after you have repaired the model from the **Repair** menu. A related warning, "No source file to restore this model from.", means the same action had nothing to work with.
+**Undo Repairs** couldn't reload the original file. Put the file back where it was when you imported it and try again, or delete the model and import the original again.
 
-**Why:** a repair keeps no copy of the mesh it replaced. **Undo Repairs** reloads the original file from disk instead. This fails when:
+<details>
+<summary>More detail</summary>
 
-- the original file was moved, renamed or deleted since you imported it,
-- the file changed and no longer holds a mesh,
-- DragonFruit has no record of the file the model came from, so there is nothing to reload.
+You see this after choosing **Repair** > **Undo Repairs**, which the menu offers only after you have repaired the model from the **Repair** menu. A related warning, "No source file to restore this model from.", means the same action had nothing to work with.
 
-When the reload works and **Auto-Repair Scenes** is on in **Settings** > **General**, the reloaded file goes through automatic repair again, so the restored model is the automatically repaired version, not the raw file.
+A repair keeps no copy of the mesh it replaced, so **Undo Repairs** reloads the original file from disk instead. That fails when:
 
-**What to do:**
+- the original file was moved, renamed or deleted since you imported it
+- the file changed and no longer holds a mesh
+- DragonFruit has no record of the file the model came from, so there is nothing to reload
 
-1. Put the original file back where it was when you imported it, then try **Undo Repairs** again.
-2. Or use normal undo (Ctrl+Z unless you changed the shortcut) right after the repair.
-3. Or delete the model and import the original file again.
+Right after a repair, normal undo (Ctrl+Z unless you changed the shortcut) also works.
+
+When the reload does work and **Auto-Repair Scenes** is on in **Settings** > **General**, the reloaded file goes through automatic repair again. The restored model is then the automatically repaired version, not the raw file.
+
+</details>
 
 ## Hollowing and drain holes
 
@@ -100,34 +104,35 @@ When the reload works and **Auto-Repair Scenes** is on in **Settings** > **Gener
 
 <!-- source: src/components/organisms/modals/MeshRepairModals.tsx -->
 
-**When it appears:** when you click **Apply** in the hollowing panel or the **Hole Punching** panel. The subtitle reads "Boolean operation requires a manifold mesh", and the text says the mesh has too many self-intersecting triangles and non-manifold edges for boolean operations to succeed.
+Hollowing or hole punching changed nothing, usually because the mesh is damaged. Repair the model (right-click > **Repair** > **Auto-Repair**), then apply again; your model hasn't been changed.
 
-**Why:** hollowing and hole punching cut into the mesh (a "boolean operation"), which only works on a closed solid. DragonFruit shows this dialog when:
+<details>
+<summary>More detail</summary>
 
-- hollowing removed nothing from inside the model, or
-- hole punching left the mesh exactly as it was.
+This appears when you click **Apply** in the hollowing panel or the **Hole Punching** panel. The subtitle reads "Boolean operation requires a manifold mesh", and the text says the mesh has too many self-intersecting triangles and non-manifold edges for boolean operations to succeed.
 
-The model is not changed. A badly damaged mesh is the usual reason. For hollowing, the same check also triggers when nothing inside the model is thicker than the **Shell Thickness**, so a thin model can show this dialog even if its mesh is fine.
+Hollowing and hole punching cut into the mesh (a "boolean operation"), which only works on a closed solid. The dialog shows when hollowing removed nothing from inside the model, or when hole punching left the mesh exactly as it was.
 
-**What to do:**
+To repair, choose **Auto-Repair** (or **Repair Again**) and click **Repair** in the **Repair Mesh** dialog. If the repair report then says "Repair Incomplete", fix the mesh in Blender or Netfabb, as the dialog suggests, and import it again.
 
-1. Right-click the model and choose **Repair** > **Auto-Repair** (or **Repair Again**), click **Repair** in the **Repair Mesh** dialog, then apply again.
-2. For hollowing, lower **Shell Thickness** or **Voxel Size** and apply again. Also check that solid areas you painted do not cover the whole inside.
-3. If the repair report says "Repair Incomplete", fix the mesh in Blender or Netfabb, as the dialog suggests, and import it again.
+A sound mesh can trigger it too when hollowing: the same check fires when nothing inside the model is thicker than the **Shell Thickness**, so thin models can show this dialog. Lower **Shell Thickness** or **Voxel Size** and apply again, and check that solid areas you painted don't cover the whole inside.
+
+</details>
 
 ### "Hollowing failed: …"
 
 <!-- source: src/features/hollowing/hollowingMessages.ts -->
 
-**When it appears:** as an error after you click **Apply** in the hollowing panel.
+The hollowing engine stopped with an error. Restart DragonFruit, open your project and apply hollowing again, trying a larger **Voxel Size** if it fails again.
 
-**Why:** the hollowing engine stopped with an error. The text after the colon is the internal reason. If it mentions "lock poisoned", an earlier mesh operation crashed while it was running, and mesh operations keep failing until DragonFruit restarts.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+This appears after you click **Apply** in the hollowing panel. The text after the colon is the internal reason. If it mentions "lock poisoned", an earlier mesh operation crashed while it was running, and mesh operations keep failing until DragonFruit restarts.
 
-1. Restart DragonFruit, open your project and apply hollowing again.
-2. Try a larger **Voxel Size**. Smaller voxel sizes need much more computation.
-3. If it keeps failing, report it with the full message text.
+Smaller voxel sizes need much more computation, which is why a larger one can help. If it keeps failing, [report it](common-issues.md#reporting-a-problem) with the full message text.
+
+</details>
 
 !!! note "Preview problems"
     If the hollowing preview does not appear while you change settings, DragonFruit does not show an error for it. Check that the mesh is a valid solid (no "Mesh Issue detected" warning, no red stripes), then click **Apply** to see a real error if there is one.
@@ -136,54 +141,55 @@ The model is not changed. A badly damaged mesh is the usual reason. For hollowin
 
 <!-- source: src/features/hollowing/hollowingMessages.ts -->
 
-**When it appears:** after you click **Remove Hollowing** and confirm.
+DragonFruit has lost its copy of the solid model. If you just hollowed it, use undo (Ctrl+Z unless you changed the shortcut); otherwise delete the model and import the original solid file again.
 
-**Why:** to remove hollowing, DragonFruit swaps the model back to the copy it saved of the solid model before hollowing. That copy is missing, or it could not be read back from the project file.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+This appears after you click **Remove Hollowing** and confirm. Removing hollowing swaps the model back to the copy saved of the solid model before hollowing; that copy is missing, or couldn't be read back from the project file.
 
-1. If you hollowed the model just now, use undo (Ctrl+Z unless you changed the shortcut) instead.
-2. Otherwise, delete the model and import the original solid file again.
-
-### "Hole punching failed: …"
-
-<!-- source: src/features/hollowing/hollowingMessages.ts -->
-
-**When it appears:** as an error after you click **Apply** in the **Hole Punching** panel.
-
-**Why:** the hole punch engine stopped with an error. The text after the colon is the internal reason. As with hollowing, "lock poisoned" means an earlier mesh operation crashed, and a restart is needed.
-
-**What to do:**
-
-1. Restart DragonFruit and apply the holes again.
-2. If it keeps failing, report it with the full message text.
+</details>
 
 ### "Hole punch source snapshot is missing or invalid. Re-apply cannot continue."
 
 <!-- source: src/features/hollowing/hollowingMessages.ts -->
 
-**When it appears:** when you click **Apply** after changing holes on a model that already has holes punched into it.
+DragonFruit can't read its copy of the model from before the holes were punched, so it can't change them. Undo back to before the holes were applied, or import the original model again and place the holes on it.
 
-**Why:** to change holes, DragonFruit starts again from the copy of the model it saved before the first holes were punched. That copy could not be read, for example because it was damaged in the project file.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+This appears when you click **Apply** after changing holes on a model that already has holes punched into it. Changing holes starts again from the copy of the model saved before the first holes were punched, and that copy couldn't be read, for example because it was damaged in the project file.
 
-1. Use undo (Ctrl+Z unless you changed the shortcut) to go back to the point before the holes were applied, if you can.
-2. Otherwise, import the original model again and place the holes on it.
-3. If this happens with a project you saved and reopened, report it and attach the `.voxl` file if you can share it.
+Undo is Ctrl+Z unless you changed the shortcut. If this happens with a project you saved and reopened, [report it](common-issues.md#reporting-a-problem) and attach the `.voxl` file if you can share it.
+
+</details>
 
 ### "Hollowing is available in DragonFruit Desktop only."
 
 <!-- source: src/features/hollowing/hollowingMessages.ts -->
 
-**When it appears:** when you apply hollowing in DragonFruit running in a web browser. "Hole punching is available in DragonFruit Desktop only." is the same message for hole punches.
+You're running DragonFruit in a web browser, which can't hollow or punch holes. Install and use the DragonFruit desktop app for hollowing and drain holes.
 
-**Why:** hollowing and hole punching run in the desktop app's native engine, which the browser version does not have.
+<details>
+<summary>More detail</summary>
 
-**What to do:**
+![The Hollowing is available in DragonFruit Desktop only message at the bottom of the window](../assets/troubleshooting/hollowing-desktop-only.png)
 
-1. Install and use the DragonFruit desktop app for hollowing and drain holes.
+"Hole punching is available in DragonFruit Desktop only." is the same message for hole punches. Both features run in the desktop app's native engine, which the browser version doesn't have.
 
-## Reporting a problem
+</details>
 
-If a fix above says to report the problem, follow [Reporting a problem](common-issues.md#reporting-a-problem). For repair problems, include the report from **Copy JSON** in the repair report.
+## Messages with no known user fix
+
+These come from unexpected errors, and the code doesn't point to a common cause. Try the step again, then restart DragonFruit and try once more; if the message comes back, [report it](common-issues.md#reporting-a-problem) with the full message text.
+
+<!-- source: src/features/scene/meshRepairMessages.ts -->
+<!-- source: src/features/hollowing/hollowingMessages.ts -->
+
+| Message | Where you see it | Also include in your report |
+| --- | --- | --- |
+| "Repair failed: …", or "Repair failed for (model name): …" when several models are repaired at once | Error toast after **Auto-Repair** or **Repair Again**. The model is left unchanged; in a batch, the other models are still repaired | The full message (the text after the colon is the internal reason), and the report from **Copy JSON** in the repair report |
+| "Hole punching failed: …" | Error after **Apply** in the **Hole Punching** panel. If it mentions "lock poisoned", an earlier mesh operation crashed and a restart is needed, as with hollowing | The full message (the text after the colon is the internal reason) |
+
+If you clicked **Stop** during a repair, you see "Repair cancelled. The model is unchanged." instead. That is not an error.

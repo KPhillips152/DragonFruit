@@ -530,7 +530,7 @@ function linksPlugin(filePath: string, version: DocsVersion): HastPluginDefiniti
         },
       },
       {
-        filter: ['img', 'video', 'source'],
+        filter: ['img'],
         visit(node, ctx) {
           const src = node.properties?.src;
           if (typeof src === 'string') {

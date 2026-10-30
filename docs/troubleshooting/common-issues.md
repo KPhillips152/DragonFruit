@@ -1,6 +1,6 @@
 # Troubleshooting
 
-If DragonFruit shows you an error or warning, find the page for what you were doing and search it for the words on your screen. Each entry says when the message appears, why, and what to do.
+If DragonFruit shows you an error or warning, find the page for what you were doing and search it for the words on your screen. Each entry starts with the fix; **More detail** says when the message appears and why.
 
 | If you were… | See |
 | --- | --- |
