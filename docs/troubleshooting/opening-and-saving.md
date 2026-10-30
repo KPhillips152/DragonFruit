@@ -10,6 +10,8 @@ Problems getting models and scenes in and out of DragonFruit: importing STL, OBJ
 
 <video src="../assets/troubleshooting/enable-chitubox-import.mp4" controls muted playsinline preload="metadata" width="100%"></video>
 
+If the video doesn't play here, [open it directly](../assets/troubleshooting/enable-chitubox-import.mp4).
+
 ![The Experiments tab in Settings, with Chitubox File Import switched off](../assets/troubleshooting/settings-experiments-chitubox.png)
 
 </details>
