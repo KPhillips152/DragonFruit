@@ -4,8 +4,8 @@ Messages you may see while placing supports by hand, running auto supports and a
 
 ## Placing supports by hand
 
-!!! note "Turning the tooltips off"
-    **Settings** > **General** > **Show support tooltips** hides the "Cannot Place Support" and "Stability Warning" tooltips. It does not change where supports can be placed.
+> [!TIP]
+> **Turning the tooltips off.** **Settings** > **General** > **Show support tooltips** hides the "Cannot Place Support" and "Stability Warning" tooltips. It does not change where supports can be placed.
 
 ### "Cannot Place Support"
 
@@ -51,8 +51,8 @@ It appears next to the cursor while you place or drag a support. The line under 
 
 ## Auto supports, bracing and presets
 
-!!! note "Not errors"
-    "No eligible supports found for Auto Bracing." means there aren't enough supports near each other to brace. "No braces to remove on this model." means **Clear All** had nothing to remove. Both are shown in yellow and nothing is wrong. If bracing fails with an error instead, see [Messages with no known user fix](#messages-with-no-known-user-fix).
+> [!NOTE]
+> **Not errors.** "No eligible supports found for Auto Bracing." means there aren't enough supports near each other to brace. "No braces to remove on this model." means **Clear All** had nothing to remove. Both are shown in yellow and nothing is wrong. If bracing fails with an error instead, see [Messages with no known user fix](#messages-with-no-known-user-fix).
 
 ### "Save failed"
 
@@ -121,8 +121,8 @@ If repairing doesn't help, [report it](common-issues.md#reporting-a-problem) and
 
 ## Updates
 
-!!! note "Save your work first"
-    DragonFruit tries to autosave before it updates, and the confirm dialog warns "Unsaved changes may be lost." Save your scene before you click **Update & Restart**.
+> [!WARNING]
+> **Save your work first.** DragonFruit tries to autosave before it updates, and the confirm dialog warns "Unsaved changes may be lost." Save your scene before you click **Update & Restart**.
 
 ### "Update failed"
 
@@ -183,11 +183,11 @@ If you installed from a downloaded Flatpak bundle, click **Releases** and instal
 
 These messages appear in **Settings** > **Backups**, in the bar at the bottom of the tab. Backups hold your app settings and printer and material profiles, saved as files in the **Selected directory**. Local backups work in the desktop app only.
 
-!!! note "Automatic backups need the tab open"
-    **Enable automatic backups** only makes backups while **Settings** > **Backups** is open. When you close the tab or Settings, no more automatic backups run. Click **Backup Now** before changes you may want to undo.
+> [!NOTE]
+> **Automatic backups need the tab open.** **Enable automatic backups** only makes backups while **Settings** > **Backups** is open. When you close the tab or Settings, no more automatic backups run. Click **Backup Now** before changes you may want to undo.
 
-!!! note "The message does not show the exact cause"
-    These messages don't include the reason the system gave for the failure. Check that the folder exists, that your user can write to it, and that the drive has free space.
+> [!NOTE]
+> **The message does not show the exact cause.** These messages don't include the reason the system gave for the failure. Check that the folder exists, that your user can write to it, and that the drive has free space.
 
 ### "Local backup sync failed."
 
@@ -273,8 +273,8 @@ It appears after you click **Restore to App** in the snapshot window and confirm
 
 </details>
 
-!!! note "A restore replaces your settings"
-    A restore that works overwrites your current app settings and profiles with the snapshot and reloads the app. It cannot be undone. Click **Backup Now** first if you may want your current settings back.
+> [!WARNING]
+> **A restore replaces your settings.** A restore that works overwrites your current app settings and profiles with the snapshot and reloads the app. It cannot be undone. Click **Backup Now** first if you may want your current settings back.
 
 ### "Failed to delete backup snapshot."
 
@@ -302,8 +302,8 @@ It appears after you click **Open Folder**. The file manager is Explorer on Wind
 
 </details>
 
-!!! note "Open Folder on Linux"
-    On Linux, **Open Folder** opens the folder that contains your backup folder, not the backup folder itself. Open the backup folder from there. If the file manager starts but then fails, DragonFruit does not notice and shows no message. Open the path from **Selected directory** by hand.
+> [!NOTE]
+> **Open Folder on Linux.** On Linux, **Open Folder** opens the folder that contains your backup folder, not the backup folder itself. Open the backup folder from there. If the file manager starts but then fails, DragonFruit does not notice and shows no message. Open the path from **Selected directory** by hand.
 
 ## Messages with no known user fix
 

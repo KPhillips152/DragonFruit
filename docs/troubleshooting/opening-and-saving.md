@@ -2,8 +2,8 @@
 
 Problems getting models and scenes in and out of DragonFruit: importing STL, OBJ and 3MF files, Lychee and ChiTuBox scenes, opening and saving `.voxl` scenes, and autosave. Find the message you're seeing; the fix comes first, and **More detail** has the rest.
 
-!!! note "ChiTuBox files need an experiment turned on"
-    DragonFruit only opens `.chitubox` and `.ctp` files after you turn on **Chitubox File Import** in **Settings** > **Experiments**, click **Apply**, then **Reload Now**. Save your scene first: reloading discards unsaved changes.
+> [!IMPORTANT]
+> **ChiTuBox files need an experiment turned on.** DragonFruit only opens `.chitubox` and `.ctp` files after you turn on **Chitubox File Import** in **Settings** > **Experiments**, click **Apply**, then **Reload Now**. Save your scene first: reloading discards unsaved changes.
 
 <details>
 <summary>Where to find it</summary>
@@ -187,8 +187,8 @@ A model is skipped when its mesh data is missing from the file, or fails to load
 
 ## Saving scenes
 
-!!! note "Hidden models aren't saved"
-    **Save scene** only writes the models that are visible. Show everything before you save if you want to keep hidden models.
+> [!WARNING]
+> **Hidden models aren't saved.** **Save scene** only writes the models that are visible. Show everything before you save if you want to keep hidden models.
 
 ### "Could not save the scene"
 
@@ -320,5 +320,5 @@ These come from unexpected errors, and the code doesn't point to a common cause.
 | "Failed to load autosave status.", "Failed to mark autosave as clean.", "Failed to open autosave location." | **Settings** > **Scene Autosave** | Which button you clicked |
 | "Failed to split supports", "Failed to merge supports", "Scan failed: …" | Right-click a model > **Supports** | The steps you took, and the model if you can share it |
 
-!!! note "Mark Recovery Clean deletes the autosave file"
-    **Mark Recovery Clean** in **Settings** > **Scene Autosave** clears the recovery flag *and* deletes the autosave file, so only use it when you're sure you don't need that copy.
+> [!WARNING]
+> **Mark Recovery Clean deletes the autosave file.** **Mark Recovery Clean** in **Settings** > **Scene Autosave** clears the recovery flag *and* deletes the autosave file, so only use it when you're sure you don't need that copy.

@@ -4,8 +4,8 @@ Warnings and errors you can see when DragonFruit checks a mesh on import, repair
 
 ## Mesh checks on import
 
-!!! note "Very large meshes are not checked"
-    When automatic repair is on, meshes with 3 million triangles or more skip it on import, so they are not checked or repaired. Run **Auto-Repair** by hand on these.
+> [!NOTE]
+> **Very large meshes are not checked.** When automatic repair is on, meshes with 3 million triangles or more skip it on import, so they are not checked or repaired. Run **Auto-Repair** by hand on these.
 
 ### "Mesh Issue detected"
 
@@ -49,8 +49,8 @@ Closing the dialog cancels the import of this model.
 
 </details>
 
-!!! note "Turning automatic repair off"
-    Automatic repair on import is set in **Settings** > **General** with **Auto-Repair** (for mesh files) and **Auto-Repair Scenes** (for scene files).
+> [!TIP]
+> **Turning automatic repair off.** Automatic repair on import is set in **Settings** > **General** with **Auto-Repair** (for mesh files) and **Auto-Repair Scenes** (for scene files).
 
 ## Repairing a mesh
 
@@ -134,8 +134,8 @@ Smaller voxel sizes need much more computation, which is why a larger one can he
 
 </details>
 
-!!! note "Preview problems"
-    If the hollowing preview does not appear while you change settings, DragonFruit does not show an error for it. Check that the mesh is a valid solid (no "Mesh Issue detected" warning, no red stripes), then click **Apply** to see a real error if there is one.
+> [!NOTE]
+> **Preview problems.** If the hollowing preview does not appear while you change settings, DragonFruit does not show an error for it. Check that the mesh is a valid solid (no "Mesh Issue detected" warning, no red stripes), then click **Apply** to see a real error if there is one.
 
 ### "Cannot remove hollowing: original geometry is unavailable."
 

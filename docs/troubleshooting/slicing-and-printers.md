@@ -24,8 +24,8 @@ If it still fails, try a different format. Then [report it](common-issues.md#rep
 
 </details>
 
-!!! note "The log file may not have the reason"
-    This error is logged in the app's internal console, not in the log file, so the log may not show it. Describe the export settings and scope you used in the report.
+> [!NOTE]
+> **The log file may not have the reason.** This error is logged in the app's internal console, not in the log file, so the log may not show it. Describe the export settings and scope you used in the report.
 
 ### "Failed to open directory."
 
@@ -106,8 +106,8 @@ If it fails in every folder, [report it](common-issues.md#reporting-a-problem).
 
 ## Connecting to network printers
 
-!!! note "Finding Network Settings"
-    Open the printer profile settings. If the profile has no saved network printer yet, click **Network Settings**. Once a printer is saved, the button reads **Show Fleet**: click it, then click **Manage Fleet**. The window that opens is titled **Network Settings**, or **Fleet Management** when you have more than one printer.
+> [!TIP]
+> **Finding Network Settings.** Open the printer profile settings. If the profile has no saved network printer yet, click **Network Settings**. Once a printer is saved, the button reads **Show Fleet**: click it, then click **Manage Fleet**. The window that opens is titled **Network Settings**, or **Fleet Management** when you have more than one printer.
 
 ### "No printers found." / "No … printers found on the network."
 
@@ -290,8 +290,8 @@ If the printer does have a matching material, check it's online, then restart Dr
 
 </details>
 
-!!! note "Restart after changing materials on the printer"
-    DragonFruit reads a printer's material list once per session and keeps it. Changes you make on the printer, or a list that came back empty because of an error, are only picked up after you restart DragonFruit.
+> [!NOTE]
+> **Restart after changing materials on the printer.** DragonFruit reads a printer's material list once per session and keeps it. Changes you make on the printer, or a list that came back empty because of an error, are only picked up after you restart DragonFruit.
 
 ## Sending and starting prints
 
